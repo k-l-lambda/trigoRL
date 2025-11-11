@@ -9,6 +9,6 @@ from trigorl.data.tgn_dataset import TGNDataset
 from trigorl.data.tokenizer import TGNByteTokenizer
 
 __all__ = [
-    "TGNByteTokenizer",
-    "TGNDataset",
+	"TGNByteTokenizer",
+	"TGNDataset",
 ]

@@ -41,7 +41,7 @@ dependencies = [
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
-    "black>=23.0.0",
+    "black-with-tabs>=23.0.0",
     "ruff>=0.0.280",
 ]
 
@@ -53,8 +53,22 @@ Repository = "https://github.com/k-l-lambda/trigoRL"
 packages = ["trigor"]
 
 [tool.black]
-line-length = 100
-target-version = ["py38", "py39", "py310", "py311"]
+# Line length
+line-length = 120
+
+# Python versions
+target-version = ['py38', 'py39', 'py310', 'py311']
+
+# Use tabs for indentation
+use-tabs = true
+
+# Keep original string quotes
+skip-string-normalization = true
+
+# Blank lines: 2 between top-level definitions (default, per PEP 8, not configurable)
+
+# File patterns
+include = '\.pyi?$'
 
 [tool.ruff]
 line-length = 100

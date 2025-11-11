@@ -4,6 +4,6 @@ from trigor.utils.checkpoint import CheckpointManager
 from trigor.utils.logger import WandbLogger
 
 __all__ = [
-    "WandbLogger",
-    "CheckpointManager",
+	"WandbLogger",
+	"CheckpointManager",
 ]

@@ -3,5 +3,5 @@
 from trigor.training.trainer import RLTrainer
 
 __all__ = [
-    "RLTrainer",
+	"RLTrainer",
 ]

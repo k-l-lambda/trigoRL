@@ -3,6 +3,6 @@
 from trigor.models.networks import MLP, PolicyValueNetwork
 
 __all__ = [
-    "MLP",
-    "PolicyValueNetwork",
+	"MLP",
+	"PolicyValueNetwork",
 ]
