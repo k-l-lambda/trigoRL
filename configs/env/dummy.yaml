@@ -1,0 +1,12 @@
+# Dummy Environment Configuration
+# A simple test environment for framework validation
+
+name: dummy
+type: DummyEnv
+
+# Environment parameters
+params:
+  observation_dim: 10
+  action_dim: 4
+  episode_length: 100
+  reward_range: [-1.0, 1.0]

@@ -14,12 +14,6 @@ dist/
 .installed.cfg
 *.egg
 
-# Virtual environments
-venv/
-ENV/
-env/
-.venv
-
 # PyTorch
 *.pth
 *.pt

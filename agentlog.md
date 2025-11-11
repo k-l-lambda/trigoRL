@@ -383,3 +383,120 @@ LSTM (xLSTM):
 6. (Optional) Implement TTT attention separately
 
 </details>
+
+
+> Write a dataset loader for TGN with byte-based tokenizer (no word participle). Use files in third_party/trigo/trigo-web/tools/output as examples.
+
+<details>
+<summary>TGN byte-level dataset loader implemented</summary>
+
+### Implementation Summary
+
+Created a standalone PyTorch dataset loader for TGN (Trigo Game Notation) files with byte-level tokenization for transformer-based sequence modeling.
+
+### Components Implemented
+
+**1. TGNByteTokenizer** (`trigorl/data/tokenizer.py`)
+- Vocabulary size: 259 (256 bytes + 3 special tokens)
+- Byte-level encoding: UTF-8 text → byte tokens (0-255)
+- Special tokens: PAD (256), START (257), END (258)
+- Support for batch encoding/decoding
+- Max length truncation and padding
+
+**2. TGNDataset** (`trigorl/data/tgn_dataset.py`)
+- PyTorch Dataset for loading TGN files
+- Next-token prediction format (input_ids → labels)
+- Attention masks for valid tokens
+- File filtering by size
+- Dataset statistics and metadata
+
+**3. Package Exports** (`trigorl/data/__init__.py`)
+- Clean API: `TGNByteTokenizer`, `TGNDataset`, `collate_tgn_batch`
+
+### Dataset Statistics
+
+Loaded from `third_party/trigo/trigo-web/tools/output`:
+- **100 TGN files**
+- **Total size**: 116,158 bytes
+- **Average**: 1,162 bytes per game (~101 moves)
+- **Range**: 39 to 4,597 bytes
+- **Context window**: 2048 bytes (covers ~95% of games)
+
+### Data Format
+
+Each batch item contains:
+```python
+{
+    'input_ids': torch.Tensor,      # [max_length-1] - input sequence
+    'labels': torch.Tensor,         # [max_length-1] - target sequence
+    'attention_mask': torch.Tensor, # [max_length-1] - valid token mask
+}
+```
+
+### Key Design Decisions
+
+**Byte-level tokenization advantages:**
+- Fixed vocabulary (259 tokens)
+- No OOV (out-of-vocabulary) issues
+- Works with any board size/coordinate notation
+- No preprocessing required
+- Compact representation
+
+**No parsing phase:**
+- Model learns structure from raw bytes
+- Simpler implementation
+- Suitable for transformer models
+- Can add parsing later if needed
+
+### Testing
+
+Created comprehensive test suite (`test_tgn_dataset.py`):
+- ✅ Tokenizer encode/decode roundtrip
+- ✅ Dataset loads all 100 files
+- ✅ Batch shapes correct
+- ✅ DataLoader iteration works
+- ✅ Attention masks valid
+
+All tests passed successfully.
+
+### Usage Example
+
+```python
+from trigorl.data import TGNByteTokenizer, TGNDataset
+from torch.utils.data import DataLoader
+
+# Setup
+tokenizer = TGNByteTokenizer()
+dataset = TGNDataset(
+    data_dir="third_party/trigo/trigo-web/tools/output",
+    tokenizer=tokenizer,
+    max_length=2048
+)
+
+# DataLoader
+dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
+
+# Iterate
+for batch in dataloader:
+    input_ids = batch['input_ids']          # [8, 2047]
+    labels = batch['labels']                # [8, 2047]
+    attention_mask = batch['attention_mask'] # [8, 2047]
+```
+
+### Documentation
+
+- Usage guide: `docs/tgn_dataset_usage.md`
+- Detailed examples and training code
+- API reference
+- Advanced filtering options
+
+### Next Steps
+
+Potential enhancements (not yet implemented):
+- Data augmentation (rotation, reflection, color swap)
+- Board state extraction from TGN notation
+- Generate larger dataset (10K+ games)
+- Train/validation split utilities
+- Integration with RL training pipeline
+
+</details>
