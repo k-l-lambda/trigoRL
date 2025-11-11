@@ -1,0 +1,26 @@
+# Quick Test Training Configuration
+
+# Minimal training for validation
+n_episodes: 20
+max_steps_per_episode: 50
+eval_frequency: 10
+eval_episodes: 3
+
+# Checkpointing
+save_frequency: 10
+save_mode: best
+keep_n_checkpoints: 2
+
+# Monitoring
+monitor:
+  field: episode_reward
+  mode: max
+
+# Logging (disable wandb for quick test)
+log:
+  frequency: 5
+  wandb: false
+  console: true
+
+# Performance
+num_workers: 0

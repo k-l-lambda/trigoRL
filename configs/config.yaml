@@ -1,0 +1,32 @@
+# TrigoRL Main Configuration
+# This file defines the default configuration hierarchy
+
+defaults:
+  - env: dummy
+  - agent: random
+  - training: default
+  - _self_
+
+# Experiment identification
+experiment:
+  name: ${env.name}_${agent.type}_${now:%Y%m%d_%H%M%S}
+  project: trigor
+  tags: []
+
+# Directories
+paths:
+  root: ${hydra:runtime.cwd}
+  data: ${paths.root}/data
+  training: ${paths.root}/training
+  output: ${paths.training}/${experiment.name}
+
+# Device configuration
+device: cuda
+seed: 42
+
+# Hydra configuration
+hydra:
+  run:
+    dir: ${paths.output}
+  job:
+    chdir: true

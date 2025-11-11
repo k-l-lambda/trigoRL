@@ -1,0 +1,8 @@
+# Random Agent Configuration
+# Simple random agent for testing the training pipeline
+
+type: RandomAgent
+
+# Agent parameters
+params:
+  seed: null  # Use global seed if null

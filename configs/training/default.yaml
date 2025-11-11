@@ -1,0 +1,26 @@
+# Default Training Configuration
+
+# Training loop
+n_episodes: 1000
+max_steps_per_episode: 1000
+eval_frequency: 100
+eval_episodes: 10
+
+# Checkpointing
+save_frequency: 100
+save_mode: best  # 'best', 'all', or 'latest'
+keep_n_checkpoints: 5
+
+# Monitoring
+monitor:
+  field: episode_reward
+  mode: max  # 'max' or 'min'
+
+# Logging
+log:
+  frequency: 10  # Log every N episodes
+  wandb: true
+  console: true
+
+# Performance
+num_workers: 0

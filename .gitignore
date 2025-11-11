@@ -1,4 +1,48 @@
 __pycache__/
+*.py[cod]
+*$py.class
 
 *.local
 *.local.*
+
+# Python
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# PyTorch
+*.pth
+*.pt
+*.ckpt
+*.chkpt
+
+# Jupyter
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
+
+# Hydra
+outputs/
+multirun/
+.hydra/
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
