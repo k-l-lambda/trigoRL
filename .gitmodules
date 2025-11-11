@@ -1,0 +1,4 @@
+[submodule "third_party/trigo"]
+	path = third_party/trigo
+	url = git@github.com:k-l-lambda/trigo.git
+	branch = develop
