@@ -34,10 +34,10 @@ def test_model_registry():
 	models = list_models()
 	print(f"\nRegistered models: {models}")
 	assert len(models) == 4, f"Expected 4 models, got {len(models)}"
-	assert 'gpt2' in models, "GPT-2 not registered"
-	assert 'llama' in models, "LLaMA not registered"
-	assert 'rwkv' in models, "RWKV not registered"
-	assert 'xlstm' in models, "xLSTM not registered"
+	assert 'GPT2CausalLM' in models, "GPT-2 not registered"
+	assert 'LlamaCausalLM' in models, "LLaMA not registered"
+	assert 'RwkvCausalLM' in models, "RWKV not registered"
+	assert 'xLSTMCausalLM' in models, "xLSTM not registered"
 
 	print("✓ All 4 models registered successfully!")
 	print()
@@ -212,7 +212,7 @@ def test_make_model_factory():
 	print("=" * 80)
 
 	# Test creating each model type via factory
-	models_to_test = ['gpt2', 'llama', 'rwkv', 'xlstm']
+	models_to_test = ['GPT2CausalLM', 'LlamaCausalLM', 'RwkvCausalLM', 'xLSTMCausalLM']
 
 	for model_type in models_to_test:
 		config = OmegaConf.create(
@@ -251,10 +251,10 @@ def test_config_compatibility():
 	}
 
 	models = {
-		'gpt2': GPT2CausalLM,
-		'llama': LlamaCausalLM,
-		'rwkv': RwkvCausalLM,
-		'xlstm': xLSTMCausalLM,
+		'GPT2CausalLM': GPT2CausalLM,
+		'LlamaCausalLM': LlamaCausalLM,
+		'RwkvCausalLM': RwkvCausalLM,
+		'xLSTMCausalLM': xLSTMCausalLM,
 	}
 
 	for model_name, model_class in models.items():

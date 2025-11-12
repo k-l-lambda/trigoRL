@@ -1,0 +1,39 @@
+# Trigo LLaMA Training Configuration
+# LLaMA with Grouped Query Attention (GQA) for efficient inference
+
+# Paths
+paths:
+  root: .
+  data: ${paths.root}/data
+  output: ${paths.root}/outputs
+
+# Data configuration
+data:
+  type: TGNDataset
+  data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output
+  max_length: 2048
+  min_length: 10
+  max_file_size: 10000
+  tokenizer_config: {}
+
+  # DataLoader settings
+  loader:
+    batch_size: 8
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+
+# Model configuration - LLaMA with GQA
+model:
+  type: LlamaCausalLM
+  vocab_size: 259  # TGN byte tokenizer vocab size
+  hidden_size: 256
+  num_layers: 6
+  num_heads: 8
+  num_key_value_heads: 2  # GQA with 4 groups (8 query heads / 2 kv heads)
+                          # Set to 8 for MHA, 1 for MQA
+  max_seq_len: 2048
+  intermediate_size: 682  # LLaMA default: hidden_size * 11008 / 4096
+  activation: silu  # SiLU (Swish) activation
+  rms_norm_eps: 1e-6
+  use_cache: true

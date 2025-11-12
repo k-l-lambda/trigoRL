@@ -1,0 +1,51 @@
+# Trigo xLSTM Training Configuration
+# xLSTM with matrix-valued cell states and chunk-wise parallelization
+
+# Paths
+paths:
+  root: .
+  data: ${paths.root}/data
+  output: ${paths.root}/outputs
+
+# Data configuration
+data:
+  type: TGNDataset
+  data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output
+  max_length: 2048
+  min_length: 10
+  max_file_size: 10000
+  tokenizer_config: {}
+
+  # DataLoader settings
+  loader:
+    batch_size: 8
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+
+# Model configuration - xLSTM
+model:
+  type: xLSTMCausalLM
+  vocab_size: 259  # TGN byte tokenizer vocab size
+  hidden_size: 256
+  num_layers: 6
+  num_heads: 8  # Multi-head architecture for xLSTM
+  max_seq_len: 2048
+  chunk_size: 64  # Chunk size for parallel processing
+  qk_dim_factor: 0.5  # Query/Key dimension scaling (0.5 means 128 dims)
+  v_dim_factor: 1.0   # Value dimension scaling (1.0 means 256 dims)
+  norm_eps: 1e-6
+  mode: train  # 'train' or 'inference'
+  use_cache: true
+
+
+# Notes:
+# - xLSTM (Extended LSTM) uses matrix-valued cell states instead of scalar
+# - Exponential gating in log-space instead of sigmoid
+# - Chunk-wise parallelization allows efficient training
+# - Multi-head architecture similar to transformers
+# - Good alternative to attention-based models for comparison
+# - chunk_size controls parallelization granularity (64 is a good default)
+# - qk_dim_factor and v_dim_factor control the dimension of projections
+# - Known issue: Forward pass may have kernel bugs in some transformers versions
+# - Model creation and parameter counting work correctly
