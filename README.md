@@ -24,41 +24,113 @@ Trigo is a modern reimplementation of a 3D Go variant with the following charact
 
 **TRY IT YOURSELF ONLINE**: here is a [Trigo demo page](https://huggingface.co/spaces/k-l-lambda/trigo).
 
+## Quick Start
+
+### Inspect Dataset
+
+View and validate the TGNDataset:
+
+```bash
+# View dataset statistics
+python tools/view_dataset.py configs/training/trigo-gpt2.yaml --stats
+
+# Validate dataset implementation
+python tools/view_dataset.py configs/training/trigo-gpt2.yaml --validate
+
+# View a specific sample
+python tools/view_dataset.py configs/training/trigo-gpt2.yaml --sample 0 --tokens
+```
+
+See [tools/README.md](tools/README.md) for comprehensive CLI documentation.
+
+### Test Models
+
+Run the model test suite:
+
+```bash
+python tests/test_models.py
+```
+
+This validates:
+- Model registry with 4 CausalLM models
+- Configuration loading (dict and OmegaConf)
+- Forward passes for GPT-2, LLaMA, and RWKV
+- Parameter counting and memory estimation
+
+### Verify Configurations
+
+Test all training configs:
+
+```bash
+python examples/verify_training_configs.py
+```
+
 ## Technical Stack
 
-### Reinforcement Learning Framework (Planned)
+### Reinforcement Learning Framework
 
 - **PyTorch**: Deep learning framework for model implementation
-- **Transformers**: Architecture foundation for the RL agent
+- **Transformers**: Architecture foundation for the RL agent (GPT-2, LLaMA, RWKV, xLSTM)
 - **Weights & Biases (wandb)**: Training metrics and experiment tracking
 - **ONNX**: Model weight export format for cross-platform deployment
+- **OmegaConf/Hydra**: Hierarchical configuration management
+
+### Current Implementation Status
+
+✅ **Data Pipeline**
+- TGNDataset: PyTorch dataset for TGN files with byte-level tokenization
+- TGNByteTokenizer: 259-token vocab (256 bytes + PAD/START/END)
+- Configuration-driven dataset loading
+
+✅ **Model Architecture**
+- 4 CausalLM models: GPT2, LLaMA (with GQA), RWKV (linear attention), xLSTM
+- Model registry with factory pattern
+- OmegaConf integration for flexible configuration
+- Parameter counting and memory footprint estimation
+
+✅ **Training Configuration**
+- Complete YAML configs for all 4 models
+- Hyperparameters tuned for each architecture
+- WandB integration (optional)
+- Checkpointing and learning rate scheduling
+
+✅ **Development Tools**
+- CLI tool for dataset inspection and validation
+- Model testing suite (109 tests passing)
+- Configuration verification scripts
 
 ## Development Roadmap
 
 The following components need to be implemented for the RL framework:
 
-1. **Environment Wrapper**
-   - Python interface to the Trigo game engine
-   - OpenAI Gym-compatible environment
-   - State representation for 3D board positions
-   - Action space definition
+1. ~~**Data Pipeline**~~ ✅ COMPLETE
+   - ~~TGNDataset implementation with byte tokenization~~
+   - ~~Dataset configuration and loading~~
+   - ~~Validation and inspection tools~~
 
-2. **Model Architecture**
-   - Transformer-based policy network
-   - Value estimation network
-   - Feature extraction from 3D board state
+2. ~~**Model Architecture**~~ ✅ COMPLETE
+   - ~~Transformer-based CausalLM implementations~~
+   - ~~Model registry and factory pattern~~
+   - ~~Configuration management~~
 
-3. **Training Pipeline**
+3. **Training Pipeline** 🚧 IN PROGRESS
+   - Training loop implementation
    - Self-play game generation
    - Experience replay buffer
    - Policy gradient or actor-critic implementation
    - Integration with Weights & Biases for experiment tracking
 
-4. **Model Export**
+4. **Environment Wrapper** 📋 PLANNED
+   - Python interface to the Trigo game engine
+   - OpenAI Gym-compatible environment
+   - State representation for 3D board positions
+   - Action space definition
+
+5. **Model Export** 📋 PLANNED
    - ONNX conversion utilities
    - Inference optimization
 
-5. **Evaluation & Analysis**
+6. **Evaluation & Analysis** 📋 PLANNED
    - Agent performance metrics
    - Game quality assessment
    - Visualization tools
