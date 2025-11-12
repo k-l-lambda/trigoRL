@@ -1,0 +1,23 @@
+# TGN Dataset Configuration (Default)
+# For training on generated game files
+
+# Dataset type (registered in trigor.data.registry)
+type: TGNDataset
+
+# Path to directory containing .tgn files
+data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output
+
+# Tokenization settings
+max_length: 2048        # Maximum sequence length
+min_length: 10          # Minimum file size in bytes
+max_file_size: 10000    # Maximum file size in bytes
+
+# Optional tokenizer configuration
+tokenizer_config: {}
+
+# DataLoader settings (for reference, not used by dataset itself)
+dataloader:
+  batch_size: 8
+  shuffle: true
+  num_workers: 4
+  pin_memory: true

@@ -1,0 +1,23 @@
+# TGN Dataset Configuration (Small - for quick testing)
+# Uses shorter sequences and smaller batch
+
+# Dataset type (registered in trigor.data.registry)
+type: TGNDataset
+
+# Path to directory containing .tgn files
+data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output
+
+# Tokenization settings
+max_length: 512         # Shorter sequences for faster training
+min_length: 10
+max_file_size: 10000
+
+# Optional tokenizer configuration
+tokenizer_config: {}
+
+# DataLoader settings (for reference)
+dataloader:
+  batch_size: 16        # Larger batch for shorter sequences
+  shuffle: true
+  num_workers: 2
+  pin_memory: true

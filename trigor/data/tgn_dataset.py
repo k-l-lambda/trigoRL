@@ -6,14 +6,16 @@ for transformer-based sequence modeling.
 """
 
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import torch
 from torch.utils.data import Dataset
 
+from trigor.data.registry import register_dataset
 from trigor.data.tokenizer import TGNByteTokenizer
 
 
+@register_dataset('TGNDataset')
 class TGNDataset(Dataset):
 	"""
 	PyTorch dataset for TGN files with byte-level tokenization.
@@ -29,6 +31,53 @@ class TGNDataset(Dataset):
 	    max_file_size: Maximum file size in bytes to include (default: 10000)
 	    filter_fn: Optional function to filter files (receives Path, returns bool)
 	"""
+
+	@classmethod
+	def from_config(cls, config: Dict[str, Any]) -> 'TGNDataset':
+		"""
+		Create TGNDataset from configuration dictionary.
+
+		This method handles tokenizer creation and parameter extraction,
+		allowing the dataset to be created directly from config without
+		special handling in the factory function.
+
+		Args:
+		    config: Configuration dictionary with keys:
+		        - data_dir: Path to directory containing .tgn files
+		        - tokenizer_config: Optional dict with tokenizer settings (default: {})
+		        - max_length: Maximum sequence length (default: 2048)
+		        - min_length: Minimum file size in bytes (default: 10)
+		        - max_file_size: Maximum file size in bytes (default: 10000)
+		        - filter_fn: Optional callable to filter files (default: None)
+
+		Returns:
+		    Instantiated TGNDataset
+
+		Example:
+		    >>> config = {
+		    ...     'data_dir': 'data/tgn_games',
+		    ...     'max_length': 512,
+		    ... }
+		    >>> dataset = TGNDataset.from_config(config)
+		"""
+		# Create tokenizer (TGNByteTokenizer is stateless, so config not needed)
+		tokenizer_config = config.get('tokenizer_config', {})
+		tokenizer = TGNByteTokenizer(**tokenizer_config)
+
+		# Extract dataset parameters
+		dataset_params = {
+			'data_dir': config['data_dir'],
+			'tokenizer': tokenizer,
+			'max_length': config.get('max_length', 2048),
+			'min_length': config.get('min_length', 10),
+			'max_file_size': config.get('max_file_size', 10000),
+		}
+
+		# Optional filter function
+		if 'filter_fn' in config:
+			dataset_params['filter_fn'] = config['filter_fn']
+
+		return cls(**dataset_params)
 
 	def __init__(
 		self,

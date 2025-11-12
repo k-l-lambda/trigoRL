@@ -4,6 +4,7 @@
 defaults:
   - env: dummy
   - agent: random
+  - dataset: tgn_default
   - training: default
   - _self_
 

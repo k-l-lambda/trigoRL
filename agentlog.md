@@ -500,3 +500,207 @@ Potential enhancements (not yet implemented):
 - Integration with RL training pipeline
 
 </details>
+
+
+## 2025/11/12
+
+
+> Write a dataset factory, allow create dataset from config file.
+
+<details>
+<summary>Dataset factory with registry pattern implemented</summary>
+
+### Implementation Summary
+
+Created a config-driven dataset factory following the same registry pattern used for agents and environments, enabling declarative dataset creation through YAML configuration files.
+
+### Components Implemented
+
+**1. Dataset Registry** (`trigor/data/registry.py`)
+- Registry pattern for dataset type management
+- `DATASETS` dictionary mapping type names to classes
+- `register_dataset()` - Register custom dataset types
+- `make_dataset()` - Factory function to create datasets from config
+- `list_datasets()` - List all registered dataset types
+- Special handling for TGNDataset tokenizer initialization
+
+**2. Configuration Files** (`configs/dataset/`)
+Three preconfigured dataset variants:
+- `tgn_default.yaml` - Standard (max_length=2048, batch_size=8)
+- `tgn_small.yaml` - Fast testing (max_length=512, batch_size=16)
+- `tgn_large.yaml` - Full sequences (max_length=4096, batch_size=4)
+
+All configs support Hydra interpolation (e.g., `${paths.root}`)
+
+**3. Main Config Integration** (`configs/config.yaml`)
+- Added `dataset: tgn_default` to default config hierarchy
+- Enables CLI overrides: `python train.py dataset=tgn_small`
+
+**4. Package Exports** (`trigor/data/__init__.py`)
+Extended exports with factory functions:
+- `make_dataset`, `register_dataset`, `list_datasets`, `DATASETS`
+
+### Architecture
+
+```
+trigor/data/
+├── __init__.py          # API exports
+├── registry.py          # Factory + registry (NEW)
+├── tgn_dataset.py       # TGNDataset implementation
+└── tokenizer.py         # TGNByteTokenizer
+
+configs/dataset/
+├── tgn_default.yaml     # Standard config (NEW)
+├── tgn_small.yaml       # Small config (NEW)
+└── tgn_large.yaml       # Large config (NEW)
+```
+
+### Usage Examples
+
+**From Python code:**
+```python
+from trigor.data import make_dataset
+
+config = {
+    'type': 'TGNDataset',
+    'data_dir': 'data/tgn_games',
+    'max_length': 512,
+}
+dataset = make_dataset(dataset_type=config['type'], config=config)
+```
+
+**With Hydra config:**
+```python
+@hydra.main(config_path="configs", config_name="config")
+def train(cfg: DictConfig):
+    dataset = make_dataset(cfg.dataset.type, cfg.dataset)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=cfg.dataset.dataloader.batch_size,
+        collate_fn=TGNDataset.collate_batch
+    )
+```
+
+**CLI overrides:**
+```bash
+python train.py dataset=tgn_small
+python train.py dataset=tgn_default dataset.max_length=1024
+python train.py dataset.data_dir=/custom/path
+```
+
+### YAML Config Structure
+
+```yaml
+type: TGNDataset
+data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output
+max_length: 2048
+min_length: 10
+max_file_size: 10000
+tokenizer_config: {}
+
+dataloader:
+  batch_size: 8
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+```
+
+### Key Features
+
+**Config-driven creation:**
+- Declarative dataset setup via YAML
+- Supports Hydra's composition and overrides
+- Reproducible configurations
+
+**Type safety:**
+- Factory validates dataset types before instantiation
+- Clear error messages for unregistered types
+
+**Extensibility:**
+```python
+from trigor.data import register_dataset
+
+class CustomDataset(Dataset):
+    def __init__(self, data_dir, param):
+        ...
+
+register_dataset('CustomDataset', CustomDataset)
+```
+
+**Consistency:**
+- Same pattern as agent/environment registries
+- Unified architecture across framework
+
+### Testing
+
+Created comprehensive test suite (`test_dataset_factory.py`):
+- ✅ Registry functions (list_datasets)
+- ✅ Config-based dataset creation
+- ✅ Dataset iteration and batching
+- ✅ DataLoader integration
+- ✅ YAML config loading
+- ✅ All 5 test sections passed
+
+**Test results:**
+```
+Registered datasets: ['TGNDataset']
+✓ Created dataset with 100 files
+✓ Tensor shapes consistent
+✓ Batch size correct: 4
+✓ Loaded all 3 config files
+```
+
+### Documentation
+
+Created detailed documentation (`docs/dataset_factory.md`):
+- Quick start guide
+- Config file structure
+- Registry API reference
+- Extension examples
+- Integration with training scripts
+- CLI usage patterns
+- Best practices
+
+### Code Formatting
+
+All new Python files reformatted with `black-with-tabs`:
+- `trigor/data/registry.py`
+- `test_dataset_factory.py`
+- Tab indentation applied
+- Consistent with project style
+
+### Integration Points
+
+**With existing framework:**
+- Complements agent registry (`trigor/agents/registry.py`)
+- Complements environment registry (`trigor/envs/registry.py`)
+- Integrates with Hydra config system
+- Works with existing TGNDataset and tokenizer
+
+**For training:**
+```python
+# Full integration example
+dataset = make_dataset(cfg.dataset.type, cfg.dataset)
+env = make_env(cfg.env.type, cfg.env)
+agent = make_agent(cfg.agent.type, env.observation_space, env.action_space, cfg.agent)
+```
+
+### Benefits
+
+1. **Reproducibility** - Configs version-controlled, experiments reproducible
+2. **Flexibility** - Easy to swap datasets via CLI without code changes
+3. **Scalability** - Register new dataset types without modifying core code
+4. **Discoverability** - `list_datasets()` shows available types
+5. **Documentation** - Config files serve as usage documentation
+6. **Type safety** - Factory validates before instantiation
+
+### Next Steps
+
+Potential enhancements:
+- Add train/validation split configs
+- Multi-dataset configs for combined loading
+- Dataset preprocessing pipelines
+- Custom filter functions in config
+- Dataset caching strategies
+
+</details>
