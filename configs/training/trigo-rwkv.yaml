@@ -23,13 +23,19 @@ data:
     num_workers: 4
     pin_memory: true
 
-# Model configuration - RWKV
+# Model configuration - RWKV wrapped in AttentionCausalLoss
 model:
-  type: RwkvCausalLM
-  vocab_size: 259  # TGN byte tokenizer vocab size
-  hidden_size: 256
-  num_layers: 6
-  max_seq_len: 2048
-  intermediate_size: 1024  # Channel-mixing FFN dimension (4 * hidden_size)
-  layer_norm_eps: 1e-5
-  use_cache: true
+  type: AttentionCausalLoss
+  config:
+    model_config:
+      type: RwkvCausalLM
+      config:
+        vocab_size: 259  # TGN byte tokenizer vocab size
+        hidden_size: 256
+        num_layers: 6
+        max_seq_len: 2048
+        intermediate_size: 1024  # Channel-mixing FFN dimension (4 * hidden_size)
+        layer_norm_eps: 1e-5
+        use_cache: true
+    ignore_index: 256  # PAD token ID to ignore in loss computation
+    label_smoothing: 0.1  # Label smoothing factor for regularization

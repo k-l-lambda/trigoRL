@@ -11,6 +11,9 @@ from trigor.models.llamaCausalLM import LlamaCausalLM
 from trigor.models.rwkvCausalLM import RwkvCausalLM
 from trigor.models.xlstmCausalLM import xLSTMCausalLM
 
+# Loss modules
+from trigor.models.attentionCausalLoss import AttentionCausalLoss
+
 
 __all__ = [
 	# RL networks
@@ -25,4 +28,6 @@ __all__ = [
 	"LlamaCausalLM",
 	"RwkvCausalLM",
 	"xLSTMCausalLM",
+	# Loss modules
+	"AttentionCausalLoss",
 ]

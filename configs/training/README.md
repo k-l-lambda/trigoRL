@@ -2,6 +2,35 @@
 
 This directory contains training configuration files for different model architectures trained on Trigo game data.
 
+## Configuration Structure
+
+All training configs now use `AttentionCausalLoss` as a wrapper around the base models, which automatically computes loss and metrics during forward pass.
+
+### Configuration Format (Nested Structure)
+
+```yaml
+model:
+  type: AttentionCausalLoss  # Wrapper that computes loss + metrics
+  config:                    # Wrapper configuration
+    model_config:            # Inner model specification
+      type: GPT2CausalLM     # Underlying model architecture
+      config:                # Architecture-specific parameters
+        vocab_size: 259
+        hidden_size: 256
+        # ... other model parameters
+    ignore_index: 256        # PAD token to ignore in loss
+    label_smoothing: 0.1     # Regularization factor
+```
+
+**Benefits:**
+- Automatic loss computation with label smoothing
+- Built-in metrics: accuracy, top-5 accuracy, perplexity
+- Proper padding handling (ignores PAD tokens)
+- Simplified training code
+- Consistent `type` + `config` pattern at each hierarchy level
+
+See [Configuration Migration Guide](../../docs/config_migration.md) for details.
+
 ## Available Configurations
 
 ### 1. `trigo-gpt2.yaml` - GPT-2 Baseline
@@ -23,10 +52,22 @@ This directory contains training configuration files for different model archite
 - Learning rate: 1e-4
 - Batch size: 8
 - Warmup steps: 1000
+- Label smoothing: 0.1
 
 **Usage:**
 ```bash
 python train.py training=trigo-gpt2
+```
+
+**Verification:**
+```python
+from omegaconf import OmegaConf
+from trigor.models import make_model
+
+cfg = OmegaConf.load('configs/training/trigo-gpt2.yaml')
+# Pass cfg.model.config to get the wrapper configuration
+model = make_model(cfg.model.type, cfg.model.config)
+print(model.count_parameters())  # 5,329,664 parameters
 ```
 
 ---

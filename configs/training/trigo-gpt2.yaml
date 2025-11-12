@@ -23,19 +23,25 @@ data:
     num_workers: 4
     pin_memory: true
 
-# Model configuration - GPT-2
+# Model configuration - GPT-2 wrapped in AttentionCausalLoss
 model:
-  type: GPT2CausalLM
-  vocab_size: 259  # TGN byte tokenizer vocab size
-  hidden_size: 256
-  num_layers: 6
-  num_heads: 8
-  max_seq_len: 2048
-  dropout: 0.1
-  activation: gelu_new
-  intermediate_size: 1024  # FFN inner dimension (4 * hidden_size)
-  layer_norm_eps: 1e-5
-  use_cache: true
+  type: AttentionCausalLoss
+  config:
+    model_config:
+      type: GPT2CausalLM
+      config:
+        vocab_size: 259  # TGN byte tokenizer vocab size
+        hidden_size: 256
+        num_layers: 6
+        num_heads: 8
+        max_seq_len: 2048
+        dropout: 0.1
+        activation: gelu_new
+        intermediate_size: 1024  # FFN inner dimension (4 * hidden_size)
+        layer_norm_eps: 1e-5
+        use_cache: true
+    ignore_index: 256  # PAD token ID to ignore in loss computation
+    label_smoothing: 0.1  # Label smoothing factor for regularization
 
 # Training configuration
 training:
