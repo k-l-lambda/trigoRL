@@ -6,10 +6,15 @@ for transformer-based sequence modeling.
 """
 
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
 from torch.utils.data import Dataset
+
+try:
+	from omegaconf import DictConfig
+except ImportError:
+	DictConfig = None
 
 from trigor.data.registry import register_dataset
 from trigor.data.tokenizer import TGNByteTokenizer
@@ -33,16 +38,17 @@ class TGNDataset(Dataset):
 	"""
 
 	@classmethod
-	def from_config(cls, config: Dict[str, Any]) -> 'TGNDataset':
+	def from_config(cls, config: Union[Dict[str, Any], 'DictConfig']) -> 'TGNDataset':
 		"""
-		Create TGNDataset from configuration dictionary.
+		Create TGNDataset from configuration dictionary or DictConfig.
 
 		This method handles tokenizer creation and parameter extraction,
 		allowing the dataset to be created directly from config without
-		special handling in the factory function.
+		special handling in the factory function. Supports both plain
+		dictionaries and OmegaConf DictConfig objects.
 
 		Args:
-		    config: Configuration dictionary with keys:
+		    config: Configuration dictionary or DictConfig with keys:
 		        - data_dir: Path to directory containing .tgn files
 		        - tokenizer_config: Optional dict with tokenizer settings (default: {})
 		        - max_length: Maximum sequence length (default: 2048)
@@ -60,13 +66,20 @@ class TGNDataset(Dataset):
 		    ... }
 		    >>> dataset = TGNDataset.from_config(config)
 		"""
+		# Convert plain dict to DictConfig for unified API
+		if isinstance(config, dict):
+			from omegaconf import OmegaConf
+
+			config = OmegaConf.create(config)
+
+		# Now use DictConfig API uniformly
 		# Create tokenizer (TGNByteTokenizer is stateless, so config not needed)
 		tokenizer_config = config.get('tokenizer_config', {})
 		tokenizer = TGNByteTokenizer(**tokenizer_config)
 
-		# Extract dataset parameters
+		# Extract dataset parameters using DictConfig API
 		dataset_params = {
-			'data_dir': config['data_dir'],
+			'data_dir': config.data_dir,
 			'tokenizer': tokenizer,
 			'max_length': config.get('max_length', 2048),
 			'min_length': config.get('min_length', 10),
@@ -75,7 +88,7 @@ class TGNDataset(Dataset):
 
 		# Optional filter function
 		if 'filter_fn' in config:
-			dataset_params['filter_fn'] = config['filter_fn']
+			dataset_params['filter_fn'] = config.filter_fn
 
 		return cls(**dataset_params)
 

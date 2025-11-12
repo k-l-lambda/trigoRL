@@ -4,6 +4,7 @@ __pycache__/
 
 *.local
 *.local.*
+*.log
 
 # Python
 *.so

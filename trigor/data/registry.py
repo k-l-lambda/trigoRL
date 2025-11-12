@@ -1,8 +1,13 @@
 """Dataset registry for TrigoRL."""
 
-from typing import Any, Dict, Type
+from typing import Any, Dict, Type, Union
 
 from torch.utils.data import Dataset
+
+try:
+	from omegaconf import DictConfig
+except ImportError:
+	DictConfig = None
 
 # Dataset registry mapping dataset type names to classes
 DATASETS: Dict[str, Type[Dataset]] = {}
@@ -45,7 +50,7 @@ def register_dataset(name: str, dataset_class: Type[Dataset] = None):
 	return _register
 
 
-def make_dataset(dataset_type: str, config: Dict[str, Any]) -> Dataset:
+def make_dataset(dataset_type: str, config: Union[Dict[str, Any], 'DictConfig']) -> Dataset:
 	"""
 	Factory function to create a dataset from configuration.
 
@@ -54,7 +59,7 @@ def make_dataset(dataset_type: str, config: Dict[str, Any]) -> Dataset:
 
 	Args:
 	    dataset_type: Dataset type name (must be registered)
-	    config: Dataset-specific configuration dictionary
+	    config: Dataset-specific configuration dictionary or DictConfig
 
 	Returns:
 	    Instantiated dataset
@@ -77,9 +82,15 @@ def make_dataset(dataset_type: str, config: Dict[str, Any]) -> Dataset:
 
 	# Check if dataset class has a from_config classmethod
 	if hasattr(dataset_class, 'from_config') and callable(getattr(dataset_class, 'from_config')):
+		# from_config handles both dict and DictConfig
 		return dataset_class.from_config(config)
 
-	# Generic fallback: pass config directly as kwargs
+	# Generic fallback: pass config as kwargs to __init__
+	# This requires a plain dict, so convert DictConfig if needed
+	if DictConfig is not None and not isinstance(config, dict):
+		from omegaconf import OmegaConf
+
+		config = OmegaConf.to_container(config, resolve=True)
 	return dataset_class(**config)
 
 
