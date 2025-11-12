@@ -23,42 +23,13 @@ data:
     num_workers: 4
     pin_memory: true
 
-# Model configuration (placeholder for future)
+# Model configuration
+# Choose from: gpt2, llama, rwkv, xlstm
 model:
-  type: transformer
+  type: GPT2CausalLM  # Model architecture type
+  vocab_size: 259  # TGN byte tokenizer vocab size
   hidden_size: 256
   num_layers: 6
   num_heads: 8
+  max_seq_len: 2048
   dropout: 0.1
-  vocab_size: 259  # TGN byte tokenizer vocab size
-
-# Training configuration
-training:
-  epochs: 100
-  learning_rate: 1e-4
-  weight_decay: 0.01
-  warmup_steps: 1000
-  max_grad_norm: 1.0
-
-  # Checkpointing
-  save_frequency: 10
-  save_dir: ${paths.output}/checkpoints
-  keep_n_checkpoints: 5
-
-  # Logging
-  log_frequency: 100
-  wandb:
-    enabled: false
-    project: trigor
-    entity: null
-    tags: []
-
-# Evaluation configuration
-eval:
-  eval_frequency: 5
-  eval_batches: 50
-
-# Device and seed
-device: cuda
-seed: 42
-

@@ -1,0 +1,24 @@
+# Trigo Training Configuration
+# Configuration for training models on Trigo game data
+
+# Paths (will be set by Hydra at runtime, or can be overridden)
+paths:
+  root: .
+  data: ${paths.root}/data
+  output: ${paths.root}/outputs
+
+# Data configuration
+data:
+  type: TGNDataset
+  data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output
+  max_length: 2048
+  min_length: 10
+  max_file_size: 10000
+  tokenizer_config: {}
+
+  # DataLoader settings
+  loader:
+    batch_size: 8
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
