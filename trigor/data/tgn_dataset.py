@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional
 import torch
 from torch.utils.data import Dataset
 
-from trigorl.data.tokenizer import TGNByteTokenizer
+from trigor.data.tokenizer import TGNByteTokenizer
 
 
 class TGNDataset(Dataset):

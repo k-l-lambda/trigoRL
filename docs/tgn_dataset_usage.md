@@ -5,7 +5,7 @@ This document demonstrates how to use the TGN byte-level dataset loader.
 ## Quick Start
 
 ```python
-from trigorl.data import TGNByteTokenizer, TGNDataset
+from trigor.data import TGNByteTokenizer, TGNDataset
 from torch.utils.data import DataLoader
 
 # 1. Create tokenizer
@@ -143,8 +143,8 @@ import torch
 import torch.nn as nn
 from torch.optim import Adam
 
-from trigorl.data import TGNByteTokenizer, TGNDataset
-from trigorl.models import PolicyValueNetwork  # Your model
+from trigor.data import TGNByteTokenizer, TGNDataset
+from trigor.models import PolicyValueNetwork  # Your model
 
 # Setup
 tokenizer = TGNByteTokenizer()
@@ -188,7 +188,7 @@ for epoch in range(10):
 ## File Structure
 
 ```
-trigorl/data/
+trigor/data/
 ├── __init__.py           # Package exports
 ├── tokenizer.py          # TGNByteTokenizer class
 └── tgn_dataset.py        # TGNDataset class

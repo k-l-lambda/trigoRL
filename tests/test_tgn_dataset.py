@@ -7,14 +7,13 @@ Verifies that the tokenizer and dataset work correctly with TGN files.
 import sys
 from pathlib import Path
 
-import torch
 from torch.utils.data import DataLoader
 
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from trigorl.data import TGNByteTokenizer, TGNDataset
+from trigor.data import TGNByteTokenizer, TGNDataset
 
 
 def test_tokenizer():
