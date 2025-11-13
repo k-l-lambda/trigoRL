@@ -96,7 +96,7 @@ class TGNDataset(Dataset):
 		self,
 		data_dir: str,
 		tokenizer: TGNByteTokenizer,
-		max_length: int = 2048,
+		max_length: int = 8192,
 		min_length: int = 10,
 		max_file_size: int = 10000,
 		filter_fn: Optional[Callable[[Path], bool]] = None,
