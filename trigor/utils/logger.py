@@ -1,9 +1,13 @@
 """Weights & Biases logger for TrigoRL."""
 
+import logging
 import os
 from typing import Any, Dict, Optional
 
 import wandb
+
+
+logger = logging.getLogger(__name__)
 
 
 class WandbLogger:
@@ -90,9 +94,14 @@ class WandbLogger:
 		if not self.enabled:
 			return
 
-		artifact = wandb.Artifact(name='model', type='model')
-		artifact.add_file(checkpoint_path)
-		wandb.log_artifact(artifact)
+		try:
+			artifact = wandb.Artifact(name='model', type='model')
+			artifact.add_file(checkpoint_path)
+			wandb.log_artifact(artifact)
+			logger.info(f"Successfully uploaded checkpoint artifact: {checkpoint_path}")
+		except Exception as e:
+			logger.warning(f"Failed to upload checkpoint artifact to wandb: {e}")
+			logger.warning("Training will continue without artifact upload")
 
 	def watch_model(self, model, log: str = 'all', log_freq: int = 100) -> None:
 		"""
@@ -119,6 +128,6 @@ class WandbLogger:
 		"""Context manager entry."""
 		return self
 
-	def __exit__(self, exc_type, exc_val, exc_tb):
+	def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
 		"""Context manager exit."""
 		self.finish()
