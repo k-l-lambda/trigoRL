@@ -30,6 +30,8 @@ dist/
 *.swp
 *~
 
+wandb/
+
 # Hydra
 outputs/
 multirun/

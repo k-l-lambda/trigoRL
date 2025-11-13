@@ -66,7 +66,7 @@ training:
     min_lr: 1e-6  # For cosine and linear schedulers
 
   # Checkpointing
-  save_frequency: 10  # Save every N epochs
+  save_frequency: 5  # Save every N epochs
   save_dir: ${paths.output}/checkpoints/${date:}-${hydra:job.config_name}
   keep_n_checkpoints: 5
   save_mode: best  # 'best', 'all', or 'latest'
@@ -79,9 +79,8 @@ training:
   # Logging
   log_frequency: 100  # Log every N steps
   wandb:
-    enabled: false
-    project: trigor
-    entity: null
+    enabled: true
+    # project is trigor by default
     name: ${hydra:job.config_name}
     tags:
       - gpt2
