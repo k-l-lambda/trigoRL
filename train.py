@@ -17,7 +17,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from trigor.agents.registry import make_agent
 from trigor.envs.registry import make_env
-from trigor.training.trainer import RLTrainer
+from trigor.training.rl_trainer import RLTrainer
 
 
 # Load environment variables
