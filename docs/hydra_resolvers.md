@@ -2,9 +2,43 @@
 
 ## Overview
 
-Hydra provides built-in resolvers that allow you to access runtime information in your configuration files. This is useful for automatically setting paths, names, and other values based on the config file name or runtime environment.
+Hydra provides built-in resolvers that allow you to access runtime information in your configuration files. This project also adds **custom resolvers** for date/time functionality.
 
 ## Available Resolvers
+
+### Custom Resolvers (Registered in train_lm.py)
+
+#### Date - `${date:}`
+
+Gets the current date in `yyyymmdd` format (e.g., `20251113`).
+
+**Example:**
+```yaml
+training:
+  # Use date in paths
+  save_dir: ${paths.output}/checkpoints/${hydra:job.config_name}_${date:}
+  # Result: ./outputs/checkpoints/trigo-gpt2_20251113
+
+  wandb:
+    # Use date in experiment name
+    name: ${hydra:job.config_name}_${date:}
+    # Result: trigo-gpt2_20251113
+
+    tags:
+      - ${hydra:job.config_name}
+      - ${date:}
+      # Results: ['trigo-gpt2', '20251113']
+```
+
+**Use cases:**
+- Date-stamped checkpoint directories
+- Experiment naming with dates
+- Log file naming
+- Daily experiment tracking
+
+**Note:** The date is evaluated when the config is loaded, not when it's used. All uses of `${date:}` in a single run will have the same value.
+
+### Built-in Hydra Resolvers
 
 ### 1. Config Name - `${hydra:job.config_name}`
 

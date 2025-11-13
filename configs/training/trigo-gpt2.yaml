@@ -26,7 +26,7 @@ data:
 
   # DataLoader settings
   loader:
-    batch_size: 8
+    batch_size: 4
     shuffle: true
     num_workers: 4
     pin_memory: true
@@ -67,7 +67,7 @@ training:
 
   # Checkpointing
   save_frequency: 10  # Save every N epochs
-  save_dir: ${paths.output}/checkpoints/${hydra:job.config_name}
+  save_dir: ${paths.output}/checkpoints/${date:}-${hydra:job.config_name}
   keep_n_checkpoints: 5
   save_mode: best  # 'best', 'all', or 'latest'
 
