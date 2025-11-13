@@ -107,8 +107,9 @@ class LMTrainer:
 			self.logger.watch_model(self.model, log='all', log_freq=config.training.log_frequency)
 
 		# Setup checkpoint manager
+		checkpoint_dir = Path(config.paths.output) / config.id / "checkpoints"
 		self.checkpoint_mgr = CheckpointManager(
-			checkpoint_dir=Path(config.training.save_dir),
+			checkpoint_dir=checkpoint_dir,
 			save_mode=config.training.save_mode,
 			monitor_field=config.training.monitor.field,
 			monitor_mode=config.training.monitor.mode,
@@ -118,6 +119,7 @@ class LMTrainer:
 		logger.info("")
 		logger.info("Trainer initialized:")
 		logger.info(f"  Device: {config.device}")
+		logger.info(f"  Checkpoint dir: {checkpoint_dir}")
 		logger.info(f"  Training samples: {len(train_loader.dataset)}")
 		logger.info(f"  Validation samples: {len(val_loader.dataset) if val_loader else 0}")
 		logger.info(f"  Batch size: {config.data.loader.batch_size}")

@@ -1,6 +1,8 @@
 # Trigo RWKV Training Configuration
 # RWKV with linear attention for efficient long-sequence processing
 
+id: trigor/${date:}-${hydra:job.config_name}
+
 # Paths
 paths:
   root: .
@@ -28,7 +30,7 @@ data:
   loader:
     batch_size: 8
     shuffle: true
-    num_workers: 4
+    num_workers: 0  # Set to 0 to avoid multiprocessing issues with file I/O
     pin_memory: true
 
 # Model configuration - RWKV wrapped in AttentionCausalLoss

@@ -1,6 +1,9 @@
 # Trigo GPT-2 Training Configuration
 # GPT-2 with standard multi-head attention (MHA)
 
+# Experiment ID (determines output directory)
+id: trigor/${date:}-${hydra:job.config_name}
+
 # Paths
 paths:
   root: .
@@ -28,7 +31,7 @@ data:
   loader:
     batch_size: 4
     shuffle: true
-    num_workers: 4
+    num_workers: 0  # Set to 0 to avoid multiprocessing issues with file I/O
     pin_memory: true
 
 # Model configuration - GPT-2 wrapped in AttentionCausalLoss
@@ -67,7 +70,6 @@ training:
 
   # Checkpointing
   save_frequency: 5  # Save every N epochs
-  save_dir: ${paths.output}/checkpoints/${date:}-${hydra:job.config_name}
   keep_n_checkpoints: 5
   save_mode: best  # 'best', 'all', or 'latest'
 

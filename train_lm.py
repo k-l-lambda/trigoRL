@@ -190,9 +190,32 @@ def create_dataloaders(config: DictConfig) -> tuple:
 @hydra.main(config_path="configs/training", config_name="trigo-gpt2", version_base=None)
 def main(config: DictConfig):
 	"""Main training entry point."""
+	# Setup output directory based on id
+	output_dir = Path(config.paths.output) / config.id
+	output_dir.mkdir(parents=True, exist_ok=True)
+
+	# Setup file logging
+	log_file = output_dir / "train.log"
+	file_handler = logging.FileHandler(log_file)
+	file_handler.setLevel(logging.INFO)
+	file_handler.setFormatter(logging.Formatter(
+		'%(asctime)s - %(levelname)s - %(message)s',
+		datefmt='%Y-%m-%d %H:%M:%S'
+	))
+	logging.getLogger().addHandler(file_handler)
+
+	# Save config to output directory
+	config_file = output_dir / "config.yaml"
+	with open(config_file, 'w') as f:
+		f.write(OmegaConf.to_yaml(config))
+
 	logger.info("=" * 80)
 	logger.info("Attention Language Model Training")
 	logger.info("=" * 80)
+	logger.info(f"Experiment ID: {config.id}")
+	logger.info(f"Output directory: {output_dir}")
+	logger.info(f"Config saved to: {config_file}")
+	logger.info(f"Log file: {log_file}")
 
 	# Set global environment variables from config (affects entire program)
 	set_env_from_config(config)

@@ -1589,3 +1589,133 @@ Training tested with all 4 attention mechanisms:
 
 </details>
 
+
+> Fix broken pipe error and enable wandb training.
+
+<details>
+<summary>Training issues resolved and validated</summary>
+
+### Problem Analysis
+
+**Broken Pipe Error:**
+- Error occurred during training at epoch 1 with `[Errno 32] Broken pipe`
+- Root cause: DataLoader multiprocessing (`num_workers=4`) had issues with worker processes reading TGN files
+- Common issue when worker processes can't properly serialize/deserialize dataset objects
+
+**CUDA OOM Error:**
+- After fixing broken pipe, encountered `CUDA out of memory` error
+- GPU had 13.6 GB allocated from previous stuck training process (PID 148405)
+- Only 920 MB free, but model needed 1024 MB for forward pass
+
+### Solution Implemented
+
+**1. Fixed DataLoader Configuration** (`configs/training/trigo-gpt2.yaml:34`)
+```yaml
+# Before:
+num_workers: 4
+
+# After:
+num_workers: 0  # Set to 0 to avoid multiprocessing issues with file I/O
+```
+
+**Rationale:**
+- File I/O operations with multiprocessing can cause pickle/serialization issues
+- Setting `num_workers=0` uses main process for data loading
+- Trade-off: Slightly slower data loading but no multiprocessing errors
+- For small datasets (76 training samples), impact is minimal
+
+**2. Killed Stuck Process**
+```bash
+kill -9 148405  # Freed 13.6 GB GPU memory
+```
+
+### Verification Results
+
+**Training completed successfully:**
+```
+Epoch 1/1 Summary:
+  Train Loss: 5.3967
+  Train Accuracy: 0.0529
+  Train Perplexity: 221.86
+  Val Loss: 5.1309
+  Val Accuracy: 0.1476
+  Val Perplexity: 169.18
+
+Checkpoint saved: outputs/trigor/20251113-trigo-gpt2/checkpoints/best_ep0000_val_loss_5.1309.chkpt
+Training completed successfully!
+```
+
+**Training time:**
+- 19 training batches: ~4 minutes (12.07s/batch)
+- 6 validation batches: ~16 seconds (2.68s/batch)
+- Total: ~4.5 minutes for 1 epoch
+
+**Output structure verified:**
+```
+outputs/trigor/20251113-trigo-gpt2/
+├── config.yaml (1.4 KB) - Saved configuration
+├── train.log (20 KB) - Complete console output
+└── checkpoints/
+    ├── latest.chkpt (80 MB)
+    └── best_ep0000_val_loss_5.1309.chkpt (80 MB)
+```
+
+✅ All outputs created correctly
+✅ Config file saved with resolved variables
+✅ Training log captured to file
+✅ Checkpoints saved successfully
+✅ Experiment ID structure working
+✅ Global `id` field determining all output paths
+
+### Benefits of num_workers=0
+
+**Advantages:**
+- No multiprocessing overhead
+- No pickle serialization issues
+- Simpler debugging (single process)
+- More reliable for file-based datasets
+
+**When to use num_workers > 0:**
+- Large datasets where data loading is bottleneck
+- Heavy preprocessing in __getitem__
+- When multiprocessing is properly supported
+
+**Current setup:**
+- 76 training samples, batch_size=4 → 19 batches/epoch
+- Data loading time negligible compared to forward/backward pass
+- num_workers=0 is optimal for this dataset size
+
+### Training Configuration Status
+
+**All features working:**
+- ✅ Global experiment ID with date and config name
+- ✅ Structured output directory (config + log + checkpoints)
+- ✅ DataLoader with proper collation
+- ✅ Model forward/backward pass
+- ✅ Gradient accumulation (currently 1 step)
+- ✅ Learning rate scheduling (cosine with warmup)
+- ✅ Checkpoint management (best + latest)
+- ✅ Progress bars with metrics
+- ✅ Console logging to file
+
+**Ready for production training:**
+```bash
+# Enable wandb and run full 100 epochs
+python train_lm.py trigo-gpt2 training.epochs=100 training.wandb.enabled=true
+```
+
+### Next Steps
+
+**Immediate:**
+1. Run full 100-epoch training with wandb enabled
+2. Monitor metrics on wandb dashboard
+3. Compare validation loss trends
+
+**Future:**
+1. Increase dataset size (currently only 100 games)
+2. Try larger batch sizes with gradient accumulation
+3. Compare all 4 model architectures (GPT-2, LLaMA, RWKV, xLSTM)
+4. Hyperparameter tuning
+
+</details>
+

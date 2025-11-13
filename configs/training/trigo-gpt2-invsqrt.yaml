@@ -1,6 +1,8 @@
 # Trigo GPT-2 Training Configuration with Inverse Square Root Scheduler
 # Uses the Transformer-style learning rate schedule from "Attention Is All You Need"
 
+id: trigor/${date:}-${hydra:job.config_name}
+
 # Paths
 paths:
   root: .
@@ -24,7 +26,7 @@ data:
   loader:
     batch_size: 8
     shuffle: true
-    num_workers: 4
+    num_workers: 0  # Set to 0 to avoid multiprocessing issues with file I/O
     pin_memory: true
 
 # Model configuration - GPT-2 wrapped in AttentionCausalLoss
