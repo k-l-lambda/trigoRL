@@ -1,5 +1,5 @@
-# Trigo GPT-2 Training Configuration
-# GPT-2 with standard multi-head attention (MHA)
+# Trigo GPT-2 Training Configuration with Inverse Square Root Scheduler
+# Uses the Transformer-style learning rate schedule from "Attention Is All You Need"
 
 # Paths
 paths:
@@ -17,10 +17,6 @@ data:
   tokenizer_config: {}
 
   # Train/validation split
-  # Format: "phases/cycle" or "*phases/cycle" (* for shuffle)
-  # Phases support range syntax with '..' for convenience
-  # Example: "*0..7/10" = 80% for training (phases 0-7, shuffled)
-  #          "8,9/10" = 20% for validation (phases 8-9, no shuffle)
   train_split: "*0..7/10"  # 80% training set with shuffle
   val_split: "8,9/10"      # 20% validation set without shuffle
 
@@ -38,59 +34,58 @@ model:
     model_config:
       type: GPT2CausalLM
       config:
-        vocab_size: 259  # TGN byte tokenizer vocab size
+        vocab_size: 259
         hidden_size: 256
         num_layers: 6
         num_heads: 8
         max_seq_len: 8192
         dropout: 0.1
         activation: gelu_new
-        intermediate_size: 1024  # FFN inner dimension (4 * hidden_size)
+        intermediate_size: 1024
         layer_norm_eps: 1e-5
         use_cache: true
-    ignore_index: 256  # PAD token ID to ignore in loss computation
-    label_smoothing: 0.1  # Label smoothing factor for regularization
+    ignore_index: 256
+    label_smoothing: 0.1
 
 # Training configuration
 training:
   epochs: 100
-  learning_rate: 1e-4
+  learning_rate: 1.0  # Will be scaled by scheduler
   weight_decay: 0.01
-  warmup_steps: 1000
+  warmup_steps: 4000  # Transformer default
   max_grad_norm: 1.0
   gradient_accumulation_steps: 1
 
-  # Learning rate scheduler
+  # Inverse square root scheduler (Transformer-style)
+  # Formula: lr = lr_mul * (d_model^-0.5) * min(step^-0.5, step * warmup^-1.5)
   scheduler:
-    type: cosine  # cosine, linear, constant, inverse_sqrt, lambda
-    min_lr: 1e-6  # For cosine and linear schedulers
+    type: inverse_sqrt
+    d_model: 256      # Should match model hidden_size
+    lr_mul: 1.0       # Learning rate multiplier
 
   # Checkpointing
-  save_frequency: 10  # Save every N epochs
-  save_dir: ${paths.output}/checkpoints/gpt2
+  save_frequency: 10
+  save_dir: ${paths.output}/checkpoints/gpt2-invsqrt
   keep_n_checkpoints: 5
-  save_mode: best  # 'best', 'all', or 'latest'
+  save_mode: best
 
   # Monitoring
   monitor:
     field: val_loss
-    mode: min  # 'min' for loss, 'max' for accuracy
+    mode: min
 
   # Logging
-  log_frequency: 100  # Log every N steps
+  log_frequency: 100
   wandb:
     enabled: false
     project: trigor
     entity: null
-    name: trigo-gpt2
-    tags: [gpt2, mha, baseline]
-
-  # Trainer-specific environment variables (only affects trainer operations)
-  env: ~
+    name: trigo-gpt2-invsqrt
+    tags: [gpt2, mha, inverse_sqrt]
 
 # Evaluation configuration
 eval:
-  eval_frequency: 5  # Evaluate every N epochs
+  eval_frequency: 5
   eval_batches: 50
 
 # Device and reproducibility

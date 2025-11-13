@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LambdaLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -178,8 +178,44 @@ class LMTrainer:
 		"""Create learning rate scheduler with warmup."""
 		total_steps = len(self.train_loader) * self.config.training.epochs
 		warmup_steps = self.config.training.warmup_steps
+		scheduler_type = self.config.training.scheduler.type
 
-		if warmup_steps == 0 and self.config.training.scheduler.type == 'constant':
+		# Special case: LambdaLR with inverse square root (no separate warmup needed)
+		if scheduler_type == 'inverse_sqrt':
+			d_model = self.config.training.scheduler.get('d_model', 512)
+			lr_mul = self.config.training.scheduler.get('lr_mul', 1.0)
+
+			def lr_lambda(current_step):
+				if current_step == 0:
+					current_step = 1
+
+				# Scale factor from model dimension
+				scale = d_model ** -0.5
+
+				# Warmup or inverse sqrt decay
+				step_scale = min(current_step ** (-0.5),
+				                current_step * warmup_steps ** (-1.5))
+
+				return lr_mul * scale * step_scale
+
+			return LambdaLR(self.optimizer, lr_lambda)
+
+		# Special case: LambdaLR with custom lambda function
+		if scheduler_type == 'lambda':
+			# User provides a lambda string that will be evaluated
+			# For safety, only allow if explicitly configured
+			lambda_str = self.config.training.scheduler.get('lambda_fn', None)
+			if lambda_str:
+				logger.warning("Using custom lambda function for learning rate scheduling")
+				logger.warning(f"Lambda: {lambda_str}")
+				# Create lambda function from string (be careful with this!)
+				lr_lambda = eval(lambda_str)
+				return LambdaLR(self.optimizer, lr_lambda)
+			else:
+				raise ValueError("scheduler.type='lambda' requires 'lambda_fn' to be specified")
+
+		# Standard schedulers with optional warmup
+		if warmup_steps == 0 and scheduler_type == 'constant':
 			# No scheduler needed
 			return None
 
@@ -199,14 +235,14 @@ class LMTrainer:
 
 		# Main scheduler phase
 		main_steps = total_steps - warmup_steps
-		if self.config.training.scheduler.type == 'cosine':
+		if scheduler_type == 'cosine':
 			main_scheduler = CosineAnnealingLR(
 				self.optimizer,
 				T_max=main_steps,
 				eta_min=self.config.training.scheduler.min_lr,
 			)
 			schedulers.append(main_scheduler)
-		elif self.config.training.scheduler.type == 'linear':
+		elif scheduler_type == 'linear':
 			main_scheduler = LinearLR(
 				self.optimizer,
 				start_factor=1.0,
