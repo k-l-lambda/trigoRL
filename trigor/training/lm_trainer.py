@@ -81,6 +81,7 @@ class LMTrainer:
 		self.current_epoch = 0
 		self.global_step = 0
 		self.global_examples = 0  # Total examples processed (for logging)
+		self.validation_count = 0  # Number of validations performed
 		self.best_val_metric = float('inf') if config.training.monitor.mode == 'min' else float('-inf')
 
 		# Setup optimizer
@@ -277,6 +278,18 @@ class LMTrainer:
 		logger.info("Starting Training")
 		logger.info("=" * 80)
 
+		# Evaluate with initial weights (only if starting from scratch)
+		if self.current_epoch == 0 and self.val_loader:
+			logger.info("")
+			logger.info("Evaluating initial model (epoch 0)...")
+			initial_metrics = self._validate_epoch()
+			logger.info("")
+			logger.info("Initial model metrics:")
+			logger.info(f"  Val Loss: {initial_metrics['val_loss']:.4f}")
+			logger.info(f"  Val Accuracy: {initial_metrics['val_accuracy']:.4f}")
+			logger.info(f"  Val Perplexity: {initial_metrics['val_perplexity']:.2f}")
+			logger.info("")
+
 		try:
 			for epoch in range(self.current_epoch, self.config.training.epochs):
 				self.current_epoch = epoch
@@ -288,13 +301,14 @@ class LMTrainer:
 				val_metrics = {}
 				if self.val_loader and (epoch % self.config.eval.eval_frequency == 0):
 					val_metrics = self._validate_epoch()
+					self.validation_count += 1
+
+					# Save checkpoint based on validation count
+					if self.validation_count % self.config.training.save_frequency == 0:
+						self._save_checkpoint(val_metrics)
 
 				# Log epoch summary
 				self._log_epoch_summary(epoch, train_metrics, val_metrics)
-
-				# Save checkpoint
-				if (epoch + 1) % self.config.training.save_frequency == 0 or (epoch + 1) == self.config.training.epochs:
-					self._save_checkpoint(val_metrics)
 
 		except KeyboardInterrupt:
 			logger.warning("")
@@ -491,6 +505,7 @@ class LMTrainer:
 			'epoch': self.current_epoch,
 			'global_step': self.global_step,
 			'global_examples': self.global_examples,  # Save examples count for logging continuity
+			'validation_count': self.validation_count,  # Save validation count for save_frequency
 			'model_state_dict': self.model.state_dict(),
 			'optimizer_state_dict': self.optimizer.state_dict(),
 			'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
@@ -550,6 +565,7 @@ class LMTrainer:
 		self.current_epoch = checkpoint['epoch'] + 1  # Resume from next epoch
 		self.global_step = checkpoint['global_step']
 		self.global_examples = checkpoint.get('global_examples', 0)  # Restore examples count (default 0 for old checkpoints)
+		self.validation_count = checkpoint.get('validation_count', 0)  # Restore validation count (default 0 for old checkpoints)
 		self.best_val_metric = checkpoint['best_val_metric']
 
-		logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}, examples {self.global_examples}")
+		logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}, examples {self.global_examples}, validations {self.validation_count}")

@@ -66,7 +66,7 @@ training:
     lr_mul: 1.0       # Learning rate multiplier
 
   # Checkpointing
-  save_frequency: 10
+  save_frequency: 1  # Save every N validations (not epochs)
   save_dir: ${paths.output}/checkpoints/gpt2-invsqrt
   keep_n_checkpoints: 5
   save_mode: best
