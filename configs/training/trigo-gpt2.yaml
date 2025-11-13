@@ -56,12 +56,13 @@ model:
 
 # Training configuration
 training:
-  epochs: 100
+  epochs: 10
   learning_rate: 1e-4
   weight_decay: 0.01
   warmup_steps: 1000
   max_grad_norm: 1.0
   gradient_accumulation_steps: 1
+  epoch_size: null  # Number of examples per epoch (null = full dataset, can repeat/subsample)
 
   # Learning rate scheduler
   scheduler:

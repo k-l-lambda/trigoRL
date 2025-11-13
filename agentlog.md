@@ -2683,3 +2683,341 @@ With batch_size=8: logs every 100 examples (every ~12 steps)
 </details>
 
 
+> Add exception handling for wandb.log_artifact() to prevent training interruption from upload failures.
+
+<details>
+<summary>Wandb artifact upload exception handling added</summary>
+
+### Enhancement Overview
+
+Added try-catch exception handling around wandb artifact upload to ensure training continues even if checkpoint upload to wandb fails due to network issues or service problems.
+
+### Changes Made
+
+**Modified `trigor/utils/logger.py`:**
+
+1. **Added logging import** (line 3):
+```python
+import logging
+import os
+from typing import Any, Dict, Optional
+
+import wandb
+
+logger = logging.getLogger(__name__)
+```
+
+2. **Wrapped artifact upload in try-except** (lines 97-104):
+```python
+def save_checkpoint(self, checkpoint_path: str) -> None:
+    """
+    Save checkpoint as wandb artifact.
+
+    Args:
+        checkpoint_path: Path to checkpoint file
+    """
+    if not self.enabled:
+        return
+
+    try:
+        artifact = wandb.Artifact(name='model', type='model')
+        artifact.add_file(checkpoint_path)
+        wandb.log_artifact(artifact)
+        logger.info(f"Successfully uploaded checkpoint artifact: {checkpoint_path}")
+    except Exception as e:
+        logger.warning(f"Failed to upload checkpoint artifact to wandb: {e}")
+        logger.warning("Training will continue without artifact upload")
+```
+
+3. **Fixed Pylance warning** (line 131):
+```python
+def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
+    """Context manager exit."""
+    self.finish()
+```
+
+### Benefits
+
+**1. Training Robustness:**
+- Training will not crash if wandb upload fails
+- Network issues won't interrupt long training runs
+- Service outages handled gracefully
+
+**2. Error Visibility:**
+- Failed uploads logged as warnings
+- Success also logged for verification
+- Clear message that training continues
+
+**3. Common Failure Scenarios Handled:**
+- Network connectivity issues
+- Wandb API rate limits
+- Disk space problems
+- File permission errors
+- Wandb service downtime
+
+### Behavior
+
+**Before:**
+- Upload failure → training crashes with exception
+- No checkpoint saved locally either
+- Training progress lost
+
+**After:**
+- Upload failure → warning logged
+- Checkpoint still saved locally
+- Training continues normally
+- Can manually upload later if needed
+
+</details>
+
+
+> Evaluate model with initial weights before training starts, recording baseline metrics at epoch 0.
+
+<details>
+<summary>Initial model evaluation added before training</summary>
+
+### Enhancement Overview
+
+Added automatic evaluation with initialized model weights before training begins, providing baseline metrics to track improvement from the start.
+
+### Changes Made
+
+**Modified `trigor/training/lm_trainer.py` (lines 280-290):**
+
+```python
+def train(self):
+    """Main training loop."""
+    logger.info("")
+    logger.info("=" * 80)
+    logger.info("Starting Training")
+    logger.info("=" * 80)
+
+    # Evaluate with initial weights (only if starting from scratch)
+    if self.current_epoch == 0 and self.val_loader:
+        logger.info("")
+        logger.info("Evaluating initial model (epoch 0)...")
+        initial_metrics = self._validate_epoch()
+        logger.info("")
+        logger.info("Initial model metrics:")
+        logger.info(f"  Val Loss: {initial_metrics['val_loss']:.4f}")
+        logger.info(f"  Val Accuracy: {initial_metrics['val_accuracy']:.4f}")
+        logger.info(f"  Val Perplexity: {initial_metrics['val_perplexity']:.2f}")
+        logger.info("")
+
+    try:
+        for epoch in range(self.current_epoch, self.config.training.epochs):
+            # ... training loop
+```
+
+### Key Features
+
+**1. Conditional Execution:**
+- Only runs when `self.current_epoch == 0` (fresh training)
+- Skipped when resuming from checkpoint
+- Only if validation loader exists
+
+**2. Automatic Logging:**
+- Metrics logged to wandb with `step=0` (via `global_examples`)
+- Console output shows baseline performance
+- Full metrics available in initial_metrics dict
+
+**3. No Side Effects:**
+- Doesn't increment epoch counter
+- Doesn't affect training state
+- Model remains in eval mode only for this validation
+
+### Example Output
+
+```
+================================================================================
+Starting Training
+================================================================================
+
+Evaluating initial model (epoch 0)...
+Epoch 0/100 [Val]: 100%|████████| 12/12 [00:03<00:00]
+
+Initial model metrics:
+  Val Loss: 5.5567
+  Val Accuracy: 0.0234
+  Val Perplexity: 259.84
+
+Epoch 1/100 [Train]: ...
+```
+
+### Benefits
+
+**1. Complete Training Curve:**
+- See improvement from random initialization
+- Baseline for comparison
+- Verify model actually learns
+
+**2. Wandb Visualization:**
+- X-axis starts at 0 with initial metrics
+- Full loss/accuracy curves from start
+- Easy to spot training issues
+
+**3. Debugging:**
+- Sanity check that validation works
+- Verify model is properly initialized
+- Baseline for detecting degradation
+
+**4. Research Value:**
+- Document starting point
+- Compare different initializations
+- Reproducibility
+
+### Resume Behavior
+
+When resuming training (e.g., from epoch 10):
+- `self.current_epoch == 10` (not 0)
+- Initial evaluation is skipped
+- Training continues normally
+- No duplicate baseline metrics
+
+</details>
+
+
+> Fix bug where best checkpoints weren't saved after 4 epochs. Change save_frequency from epoch-based to validation-based with default value of 1.
+
+<details>
+<summary>Checkpoint save frequency changed to validation-based</summary>
+
+### Problem Analysis
+
+**Original Bug:**
+With `save_frequency=2` (epochs) and `eval_frequency=2` (epochs):
+- Epoch 0: validate ✓ → don't save (0+1=1, 1%2≠0)
+- Epoch 1: no validation → save but `val_metrics={}` (1+1=2, 2%2=0) ❌
+- Epoch 2: validate ✓ → don't save (2+1=3, 3%2≠0)
+- Epoch 3: no validation → save but `val_metrics={}` (3+1=4, 4%2=0) ❌
+
+When `val_metrics` is empty, `metric_value=None`, and CheckpointManager cannot determine if it's the best checkpoint.
+
+### Solution Implemented
+
+**Changed save_frequency semantics from epoch-based to validation-based.**
+
+### Changes Made
+
+**1. Added validation_count tracker** (`lm_trainer.py:84`):
+```python
+# Training state
+self.current_epoch = 0
+self.global_step = 0
+self.global_examples = 0  # Total examples processed (for logging)
+self.validation_count = 0  # Number of validations performed
+self.best_val_metric = float('inf') if config.training.monitor.mode == 'min' else float('-inf')
+```
+
+**2. Modified training loop** (`lm_trainer.py:302-308`):
+```python
+# Validation phase
+val_metrics = {}
+if self.val_loader and (epoch % self.config.eval.eval_frequency == 0):
+    val_metrics = self._validate_epoch()
+    self.validation_count += 1
+
+    # Save checkpoint based on validation count
+    if self.validation_count % self.config.training.save_frequency == 0:
+        self._save_checkpoint(val_metrics)
+```
+
+**3. Updated checkpoint save/load** (`lm_trainer.py:508, 568`):
+
+Save:
+```python
+checkpoint = {
+    'epoch': self.current_epoch,
+    'global_step': self.global_step,
+    'global_examples': self.global_examples,
+    'validation_count': self.validation_count,  # Save validation count
+    'model_state_dict': self.model.state_dict(),
+    # ...
+}
+```
+
+Load:
+```python
+self.current_epoch = checkpoint['epoch'] + 1
+self.global_step = checkpoint['global_step']
+self.global_examples = checkpoint.get('global_examples', 0)
+self.validation_count = checkpoint.get('validation_count', 0)  # Restore validation count
+self.best_val_metric = checkpoint['best_val_metric']
+
+logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}, examples {self.global_examples}, validations {self.validation_count}")
+```
+
+**4. Updated all config files:**
+
+Changed all 4 training configs:
+```yaml
+# Before:
+save_frequency: 2  # Save every N epochs
+
+# After:
+save_frequency: 1  # Save every N validations (not epochs)
+```
+
+Files updated:
+- `configs/training/trigo-gpt2.yaml`
+- `configs/training/trigo-gpt2-invsqrt.yaml`
+- `configs/training/trigo-llama.yaml`
+- `configs/training/trigo-rwkv.yaml`
+
+### New Behavior
+
+With `eval_frequency=2, save_frequency=1`:
+
+- **Epoch 0**: validate ✓ (validation_count=1) → save ✓ (1%1==0)
+- **Epoch 1**: no validation → no save
+- **Epoch 2**: validate ✓ (validation_count=2) → save ✓ (2%1==0)
+- **Epoch 3**: no validation → no save
+- **Epoch 4**: validate ✓ (validation_count=3) → save ✓ (3%1==0)
+
+**Every validation now triggers a checkpoint save with valid metrics!**
+
+### Benefits
+
+**1. Bug Fixed:**
+- Always have validation metrics when saving best checkpoint
+- No more `metric_value=None` problem
+- Best checkpoint selection always works
+
+**2. More Intuitive:**
+- save_frequency based on validations, not arbitrary epochs
+- Direct relationship: "save every N validations"
+- Makes sense for best checkpoint tracking
+
+**3. Default Behavior (save_frequency=1):**
+- Save after every validation
+- Never miss a potential best checkpoint
+- Maximum safety with minimal overhead
+
+**4. Backward Compatible:**
+- Old checkpoints without `validation_count` default to 0
+- Training can resume seamlessly
+- No breaking changes
+
+### Example Timeline
+
+**100 epoch training with eval_frequency=2, save_frequency=1:**
+- 50 validations total (epochs 0,2,4,...,98)
+- 50 checkpoint saves (after each validation)
+- Best checkpoint always based on latest metrics
+- No confusion between epoch and validation counts
+
+### Semantics Clarification
+
+**Before (confusing):**
+- `save_frequency=2` → save every 2 epochs (may or may not have metrics)
+- `eval_frequency=2` → validate every 2 epochs
+- Mismatch caused the bug
+
+**After (clear):**
+- `save_frequency=1` → save after 1 validation (always has metrics)
+- `eval_frequency=2` → validate every 2 epochs
+- Perfect alignment
+
+</details>
+
+

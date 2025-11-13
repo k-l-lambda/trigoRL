@@ -57,6 +57,7 @@ training:
   warmup_steps: 4000  # Transformer default
   max_grad_norm: 1.0
   gradient_accumulation_steps: 1
+  epoch_size: null  # Number of examples per epoch (null = full dataset, can repeat/subsample)
 
   # Inverse square root scheduler (Transformer-style)
   # Formula: lr = lr_mul * (d_model^-0.5) * min(step^-0.5, step * warmup^-1.5)

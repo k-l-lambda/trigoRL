@@ -5,6 +5,7 @@ Provides epoch-based training loop with wandb logging, checkpointing,
 and learning rate scheduling.
 """
 
+import itertools
 import logging
 import os
 from pathlib import Path
@@ -129,6 +130,15 @@ class LMTrainer:
 		logger.info(f"  Batch size: {config.data.loader.batch_size}")
 		logger.info(f"  Gradient accumulation steps: {config.training.gradient_accumulation_steps}")
 		logger.info(f"  Effective batch size: {config.data.loader.batch_size * config.training.gradient_accumulation_steps}")
+
+		# Show epoch size info
+		epoch_size = config.training.get('epoch_size', None)
+		if epoch_size is not None:
+			batches_per_epoch = (epoch_size + config.data.loader.batch_size - 1) // config.data.loader.batch_size
+			logger.info(f"  Epoch size: {epoch_size} examples (~{batches_per_epoch} batches)")
+		else:
+			logger.info(f"  Epoch size: full dataset ({len(train_loader)} batches)")
+
 		logger.info(f"  Epochs: {config.training.epochs}")
 		logger.info(f"  Learning rate: {config.training.learning_rate}")
 		logger.info(f"  Warmup steps: {config.training.warmup_steps}")
@@ -338,8 +348,25 @@ class LMTrainer:
 		total_tokens = 0
 		num_batches = 0
 
+		# Determine number of batches for this epoch
+		epoch_size = self.config.training.get('epoch_size', None)
+		if epoch_size is not None:
+			# Calculate batches needed for epoch_size examples
+			batch_size = self.config.data.loader.batch_size
+			max_batches = (epoch_size + batch_size - 1) // batch_size  # Ceiling division
+			# Create infinite iterator from train_loader
+			data_iterator = itertools.cycle(self.train_loader)
+		else:
+			# Use full dataset (one pass)
+			max_batches = len(self.train_loader)
+			data_iterator = iter(self.train_loader)
+
 		# Progress bar
-		pbar = tqdm(self.train_loader, desc=f"Epoch {self.current_epoch+1}/{self.config.training.epochs} [Train]")
+		pbar = tqdm(
+			itertools.islice(data_iterator, max_batches),
+			total=max_batches,
+			desc=f"Epoch {self.current_epoch+1}/{self.config.training.epochs} [Train]"
+		)
 
 		self.optimizer.zero_grad()
 
