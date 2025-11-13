@@ -53,3 +53,51 @@ model:
         use_cache: true
     ignore_index: 256  # PAD token ID to ignore in loss computation
     label_smoothing: 0.1  # Label smoothing factor for regularization
+
+# Training configuration
+training:
+  epochs: 100
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 1
+
+  # Learning rate scheduler
+  scheduler:
+    type: cosine  # cosine, linear, constant, inverse_sqrt, lambda
+    min_lr: 1e-6  # For cosine and linear schedulers
+
+  # Checkpointing
+  save_frequency: 2  # Save every N epochs
+  keep_n_checkpoints: 3
+  save_mode: best  # 'best', 'all', or 'latest'
+
+  # Monitoring
+  monitor:
+    field: val_loss
+    mode: min  # 'min' for loss, 'max' for accuracy
+
+  # Logging
+  log_frequency: 100  # Log every N steps
+  wandb:
+    enabled: true
+    # project is trigor by default
+    # name will be set to config.id automatically
+    tags:
+      - llama
+      - gqa
+      - efficient
+
+  # Trainer-specific environment variables (only affects trainer operations)
+  env: ~
+
+# Evaluation configuration
+eval:
+  eval_frequency: 2  # Evaluate every N epochs
+  eval_batches: 50
+
+# Device and reproducibility
+device: cuda
+seed: 42
+deterministic: true

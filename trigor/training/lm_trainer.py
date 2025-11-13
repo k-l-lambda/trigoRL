@@ -94,11 +94,13 @@ class LMTrainer:
 			# Use environment variables as defaults for null config values
 			wandb_entity = config.training.wandb.entity or os.getenv('WANDB_ENTITY')
 			wandb_project = config.training.wandb.project or os.getenv('WANDB_PROJECT', 'trigor')
+			# Use config.id as wandb run name for consistency
+			wandb_name = config.training.wandb.get('name', config.id)
 
 			self.logger = WandbLogger(
 				project=wandb_project,
 				entity=wandb_entity,
-				name=config.training.wandb.name,
+				name=wandb_name,
 				config=OmegaConf.to_container(config, resolve=True),
 				tags=config.training.wandb.tags,
 				enabled=True,

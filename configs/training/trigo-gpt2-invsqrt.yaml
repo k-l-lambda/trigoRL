@@ -82,7 +82,7 @@ training:
     enabled: false
     project: trigor
     entity: null
-    name: trigo-gpt2-invsqrt
+    # name will be set to config.id automatically
     tags: [gpt2, mha, inverse_sqrt]
 
 # Evaluation configuration

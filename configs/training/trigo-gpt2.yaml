@@ -83,7 +83,6 @@ training:
   wandb:
     enabled: true
     # project is trigor by default
-    name: ${hydra:job.config_name}
     tags:
       - gpt2
       - mha
