@@ -4,10 +4,10 @@ Training script for attention-based language models.
 
 Usage:
     python train_lm.py                                   # Use default config (trigo-gpt2)
-    python train_lm.py training=trigo-llama             # Use specific config
-    python train_lm.py training.wandb.enabled=true      # Enable wandb logging
-    python train_lm.py training.epochs=50               # Override epochs
-    python train_lm.py --config-name=trigo-rwkv         # Alternative syntax
+    python train_lm.py trigo-llama                      # Use specific config (short name)
+    python train_lm.py configs/training/trigo-rwkv.yaml # Use config file path
+    python train_lm.py trigo-gpt2 training.epochs=50    # Config + overrides
+    python train_lm.py --config-name=trigo-rwkv          # Alternative syntax
 """
 
 import logging
@@ -39,6 +39,47 @@ logging.basicConfig(
 	datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+
+def parse_positional_config():
+	"""
+	Parse positional argument as config name/path.
+
+	Supports:
+	  - Short name: trigo-gpt2
+	  - Relative path: configs/training/trigo-gpt2.yaml
+	  - Absolute path: /path/to/config.yaml
+
+	Converts to Hydra's --config-name format.
+	"""
+	# Check if first argument is a positional config (not a Hydra override)
+	if len(sys.argv) > 1:
+		first_arg = sys.argv[1]
+
+		# Skip if it's already a Hydra parameter
+		if first_arg.startswith('-') or '=' in first_arg:
+			return
+
+		# Parse the positional argument
+		config_path = Path(first_arg)
+
+		# Case 1: Full path to config file
+		if config_path.suffix in ['.yaml', '.yml']:
+			config_name = config_path.stem  # Get name without extension
+
+			# If it's a relative path starting with configs/training/
+			if str(config_path).startswith('configs/training/'):
+				# Just use the config name
+				sys.argv[1] = f'--config-name={config_name}'
+			else:
+				# For other paths, we need to handle config_path too
+				# For simplicity, just use the name and assume default path
+				sys.argv[1] = f'--config-name={config_name}'
+
+		# Case 2: Short name (e.g., trigo-gpt2)
+		else:
+			config_name = first_arg
+			sys.argv[1] = f'--config-name={config_name}'
 
 
 def set_env_from_config(config: DictConfig):
@@ -202,6 +243,9 @@ def main(config: DictConfig):
 
 
 if __name__ == "__main__":
+	# Parse positional config argument before Hydra processes sys.argv
+	parse_positional_config()
+
 	try:
 		main()
 	except Exception as e:

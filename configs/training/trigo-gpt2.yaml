@@ -67,7 +67,7 @@ training:
 
   # Checkpointing
   save_frequency: 10  # Save every N epochs
-  save_dir: ${paths.output}/checkpoints/gpt2
+  save_dir: ${paths.output}/checkpoints/${hydra:job.config_name}
   keep_n_checkpoints: 5
   save_mode: best  # 'best', 'all', or 'latest'
 
@@ -82,8 +82,11 @@ training:
     enabled: false
     project: trigor
     entity: null
-    name: trigo-gpt2
-    tags: [gpt2, mha, baseline]
+    name: ${hydra:job.config_name}
+    tags:
+      - gpt2
+      - mha
+      - baseline
 
   # Trainer-specific environment variables (only affects trainer operations)
   env: ~
