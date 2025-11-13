@@ -77,7 +77,7 @@ training:
     mode: min
 
   # Logging
-  log_frequency: 100
+  log_frequency: 100  # Log every N examples (not steps)
   wandb:
     enabled: false
     project: trigor

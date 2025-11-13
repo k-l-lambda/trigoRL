@@ -79,7 +79,7 @@ training:
     mode: min  # 'min' for loss, 'max' for accuracy
 
   # Logging
-  log_frequency: 100  # Log every N steps
+  log_frequency: 16  # Log every N examples (not steps)
   wandb:
     enabled: true
     # project is trigor by default

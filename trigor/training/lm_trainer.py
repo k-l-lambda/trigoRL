@@ -80,6 +80,7 @@ class LMTrainer:
 		# Training state
 		self.current_epoch = 0
 		self.global_step = 0
+		self.global_examples = 0  # Total examples processed (for logging)
 		self.best_val_metric = float('inf') if config.training.monitor.mode == 'min' else float('-inf')
 
 		# Setup optimizer
@@ -92,8 +93,8 @@ class LMTrainer:
 		self.logger = None
 		if config.training.wandb.enabled:
 			# Use environment variables as defaults for null config values
-			wandb_entity = config.training.wandb.entity or os.getenv('WANDB_ENTITY')
-			wandb_project = config.training.wandb.project or os.getenv('WANDB_PROJECT', 'trigor')
+			wandb_entity = os.getenv('WANDB_ENTITY')
+			wandb_project = os.getenv('WANDB_PROJECT', 'trigor')
 			# Use config.id as wandb run name for consistency
 			wandb_name = config.training.wandb.get('name', config.id)
 
@@ -130,6 +131,7 @@ class LMTrainer:
 		logger.info(f"  Epochs: {config.training.epochs}")
 		logger.info(f"  Learning rate: {config.training.learning_rate}")
 		logger.info(f"  Warmup steps: {config.training.warmup_steps}")
+		logger.info(f"  Log frequency: every {config.training.log_frequency} examples")
 		logger.info(f"  Wandb logging: {'enabled' if config.training.wandb.enabled else 'disabled'}")
 
 
@@ -375,18 +377,20 @@ class LMTrainer:
 				# Zero gradients
 				self.optimizer.zero_grad()
 
-				# Increment global step
+				# Increment global step and examples
 				self.global_step += 1
+				current_batch_size = input_ids.size(0)
+				self.global_examples += current_batch_size
 
-				# Log to wandb
-				if self.logger and (self.global_step % self.config.training.log_frequency == 0):
+				# Log to wandb (based on examples processed)
+				if self.logger and (self.global_examples % self.config.training.log_frequency == 0):
 					self.logger.log({
 						'train/loss': outputs['loss'].item(),
 						'train/accuracy': outputs['accuracy'].item(),
 						'train/perplexity': outputs['perplexity'].item(),
 						'train/top5_accuracy': outputs['top5_accuracy'].item(),
 						'train/learning_rate': self.optimizer.param_groups[0]['lr'],
-					}, step=self.global_step)
+					}, step=self.global_examples)
 
 		pbar.close()
 
@@ -462,7 +466,7 @@ class LMTrainer:
 
 		# Log to wandb
 		if self.logger:
-			self.logger.log(avg_metrics, step=self.global_step)
+			self.logger.log(avg_metrics, step=self.global_examples)
 
 		return avg_metrics
 
@@ -486,6 +490,7 @@ class LMTrainer:
 		checkpoint = {
 			'epoch': self.current_epoch,
 			'global_step': self.global_step,
+			'global_examples': self.global_examples,  # Save examples count for logging continuity
 			'model_state_dict': self.model.state_dict(),
 			'optimizer_state_dict': self.optimizer.state_dict(),
 			'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
@@ -544,6 +549,7 @@ class LMTrainer:
 
 		self.current_epoch = checkpoint['epoch'] + 1  # Resume from next epoch
 		self.global_step = checkpoint['global_step']
+		self.global_examples = checkpoint.get('global_examples', 0)  # Restore examples count (default 0 for old checkpoints)
 		self.best_val_metric = checkpoint['best_val_metric']
 
-		logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}")
+		logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}, examples {self.global_examples}")

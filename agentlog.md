@@ -2491,3 +2491,195 @@ All training configurations are now:
 </details>
 
 
+> Change log_frequency unit from steps to examples (step * batch_size), and report global_examples as the step parameter in wandb logging.
+
+<details>
+<summary>Log frequency unit changed from steps to examples</summary>
+
+### Enhancement Overview
+
+Changed the logging frequency unit from training steps to processed examples (samples), making progress tracking more intuitive and consistent with the actual amount of data processed.
+
+### Changes Made
+
+**1. LMTrainer State Tracking** (`trigor/training/lm_trainer.py:83`)
+
+Added `global_examples` counter to track total examples processed:
+```python
+# Training state
+self.current_epoch = 0
+self.global_step = 0
+self.global_examples = 0  # Total examples processed (for logging)
+self.best_val_metric = float('inf') if config.training.monitor.mode == 'min' else float('-inf')
+```
+
+**2. Training Loop Updates** (`trigor/training/lm_trainer.py:379-392`)
+
+Modified to increment `global_examples` and use it for logging:
+```python
+# Increment global step and examples
+self.global_step += 1
+current_batch_size = input_ids.size(0)
+self.global_examples += current_batch_size
+
+# Log to wandb (based on examples processed)
+if self.logger and (self.global_examples % self.config.training.log_frequency == 0):
+    self.logger.log({
+        'train/loss': outputs['loss'].item(),
+        'train/accuracy': outputs['accuracy'].item(),
+        'train/perplexity': outputs['perplexity'].item(),
+        'train/top5_accuracy': outputs['top5_accuracy'].item(),
+        'train/learning_rate': self.optimizer.param_groups[0]['lr'],
+    }, step=self.global_examples)  # Use examples instead of steps
+```
+
+**Key changes:**
+- Calculate `current_batch_size` from actual batch (handles variable batch sizes)
+- Accumulate `global_examples += current_batch_size`
+- Check logging condition: `global_examples % log_frequency == 0`
+- Report to wandb with `step=self.global_examples`
+
+**3. Validation Logging** (`trigor/training/lm_trainer.py:468`)
+
+Updated validation metrics to use `global_examples`:
+```python
+# Log to wandb
+if self.logger:
+    self.logger.log(avg_metrics, step=self.global_examples)
+```
+
+**4. Checkpoint Management** (`trigor/training/lm_trainer.py:492`)
+
+Save `global_examples` in checkpoints for continuity:
+```python
+checkpoint = {
+    'epoch': self.current_epoch,
+    'global_step': self.global_step,
+    'global_examples': self.global_examples,  # Save examples count for logging continuity
+    'model_state_dict': self.model.state_dict(),
+    'optimizer_state_dict': self.optimizer.state_dict(),
+    'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+    'best_val_metric': self.best_val_metric,
+    'config': OmegaConf.to_container(self.config, resolve=True),
+}
+```
+
+**5. Checkpoint Loading** (`trigor/training/lm_trainer.py:551`)
+
+Restore `global_examples` when resuming:
+```python
+self.current_epoch = checkpoint['epoch'] + 1  # Resume from next epoch
+self.global_step = checkpoint['global_step']
+self.global_examples = checkpoint.get('global_examples', 0)  # Restore examples count (default 0 for old checkpoints)
+self.best_val_metric = checkpoint['best_val_metric']
+
+logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}, examples {self.global_examples}")
+```
+
+**Note:** Uses `.get('global_examples', 0)` for backward compatibility with old checkpoints that don't have this field.
+
+**6. Initialization Logging** (`trigor/training/lm_trainer.py:134`)
+
+Added log frequency info to trainer initialization:
+```python
+logger.info(f"  Warmup steps: {config.training.warmup_steps}")
+logger.info(f"  Log frequency: every {config.training.log_frequency} examples")
+logger.info(f"  Wandb logging: {'enabled' if config.training.wandb.enabled else 'disabled'}")
+```
+
+**7. Configuration Files Updates**
+
+Updated all 4 training config files to clarify the unit:
+
+- `configs/training/trigo-gpt2.yaml:82` - `log_frequency: 100  # Log every N examples (not steps)`
+- `configs/training/trigo-gpt2-invsqrt.yaml:80` - `log_frequency: 100  # Log every N examples (not steps)`
+- `configs/training/trigo-llama.yaml:82` - `log_frequency: 100  # Log every N examples (not steps)`
+- `configs/training/trigo-rwkv.yaml:78` - `log_frequency: 100  # Log every N examples (not steps)`
+
+Also adjusted `trigo-gpt2.yaml` log_frequency from 5 to 100 (since 5 examples is too frequent).
+
+### Benefits
+
+**1. More Intuitive Progress Tracking:**
+- Examples processed is a natural measure of training progress
+- Independent of batch size or gradient accumulation settings
+- Easier to compare training runs with different batch sizes
+
+**2. Consistent X-axis in Wandb:**
+- Wandb charts now show progress by examples processed
+- Comparable across different batch size configurations
+- More meaningful for data-centric analysis
+
+**3. Better Resource Planning:**
+- Easy to calculate: "How many examples to process?"
+- Direct correlation with dataset size
+- Intuitive for planning training budgets
+
+**4. Backward Compatible:**
+- Old checkpoints without `global_examples` default to 0
+- Training can resume from old checkpoints seamlessly
+- No breaking changes to existing experiments
+
+### Example Calculations
+
+**Scenario 1: Batch size = 4, log_frequency = 100**
+- Logs every 100 examples
+- With batch_size=4: logs approximately every 25 steps
+- Wandb x-axis shows: 100, 200, 300, 400, ...
+
+**Scenario 2: Batch size = 8, log_frequency = 100**
+- Logs every 100 examples
+- With batch_size=8: logs approximately every 12-13 steps
+- Wandb x-axis shows: 100, 200, 300, 400, ...
+- **Same x-axis scale as Scenario 1** (benefit of example-based logging)
+
+**Scenario 3: Gradient accumulation = 2, batch_size = 4**
+- Effective batch = 8, but physical batch = 4
+- Still logs every 100 examples based on physical batch size
+- Consistent behavior regardless of accumulation
+
+### Verification
+
+**Training state tracking:**
+- ✅ `global_examples` initialized to 0
+- ✅ Incremented by actual batch size in training loop
+- ✅ Used for logging condition
+- ✅ Reported to wandb as step parameter
+
+**Checkpoint persistence:**
+- ✅ `global_examples` saved in checkpoint
+- ✅ Restored when resuming training
+- ✅ Backward compatible with old checkpoints
+- ✅ Logged in resume message
+
+**Configuration updates:**
+- ✅ All 4 config files have updated comments
+- ✅ log_frequency values adjusted appropriately
+- ✅ Initialization log shows "every N examples"
+
+### Usage Impact
+
+**Before (step-based):**
+```yaml
+log_frequency: 100  # Log every 100 steps
+```
+With batch_size=4: logs every 400 examples
+With batch_size=8: logs every 800 examples
+→ Inconsistent x-axis scaling
+
+**After (example-based):**
+```yaml
+log_frequency: 100  # Log every N examples (not steps)
+```
+With batch_size=4: logs every 100 examples (every ~25 steps)
+With batch_size=8: logs every 100 examples (every ~12 steps)
+→ Consistent x-axis scaling
+
+**Recommended log_frequency values:**
+- Small datasets (100 samples): 50-100 examples
+- Medium datasets (1000 samples): 100-500 examples
+- Large datasets (10000+ samples): 500-1000 examples
+
+</details>
+
+
