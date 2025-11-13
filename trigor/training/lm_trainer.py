@@ -57,6 +57,9 @@ class LMTrainer:
 		self.train_loader = train_loader
 		self.val_loader = val_loader
 
+		# Set environment variables from config
+		self._set_env_variables()
+
 		# Create model from config
 		logger.info("=" * 80)
 		logger.info("Creating Model")
@@ -124,6 +127,30 @@ class LMTrainer:
 		logger.info(f"  Learning rate: {config.training.learning_rate}")
 		logger.info(f"  Warmup steps: {config.training.warmup_steps}")
 		logger.info(f"  Wandb logging: {'enabled' if config.training.wandb.enabled else 'disabled'}")
+
+
+	def _set_env_variables(self):
+		"""
+		Set trainer-specific environment variables from config.
+
+		Reads the 'training.env' section of config and sets os.environ accordingly.
+		This only affects trainer operations, not the entire program.
+		Useful for setting trainer-specific parameters.
+		"""
+		if not self.config.training.get('env'):
+			return
+
+		env_vars = OmegaConf.to_container(self.config.training.env, resolve=True)
+		if not env_vars:
+			return
+
+		logger.info("")
+		logger.info("Setting trainer environment variables from config:")
+		for key, value in env_vars.items():
+			# Convert value to string (in case it's a number)
+			str_value = str(value)
+			os.environ[key] = str_value
+			logger.info(f"  {key}: {str_value}")
 
 
 	def _create_model(self) -> nn.Module:

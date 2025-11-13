@@ -11,6 +11,7 @@ Usage:
 """
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -38,6 +39,31 @@ logging.basicConfig(
 	datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+
+
+def set_env_from_config(config: DictConfig):
+	"""
+	Set environment variables from config.
+
+	Reads the top-level 'env' section and sets os.environ.
+	This affects the entire program execution.
+
+	Args:
+	    config: Configuration object with optional 'env' section
+	"""
+	if not config.get('env'):
+		return
+
+	env_vars = OmegaConf.to_container(config.env, resolve=True)
+	if not env_vars:
+		return
+
+	logger.info("")
+	logger.info("Setting global environment variables from config:")
+	for key, value in env_vars.items():
+		str_value = str(value)
+		os.environ[key] = str_value
+		logger.info(f"  {key}: {str_value}")
 
 
 def set_seed(seed: int, deterministic: bool = False):
@@ -122,6 +148,9 @@ def main(config: DictConfig):
 	logger.info("=" * 80)
 	logger.info("Attention Language Model Training")
 	logger.info("=" * 80)
+
+	# Set global environment variables from config (affects entire program)
+	set_env_from_config(config)
 
 	# Print config
 	logger.info("")

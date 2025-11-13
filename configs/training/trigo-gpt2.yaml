@@ -85,6 +85,9 @@ training:
     name: trigo-gpt2
     tags: [gpt2, mha, baseline]
 
+  # Trainer-specific environment variables (only affects trainer operations)
+  env: ~
+
 # Evaluation configuration
 eval:
   eval_frequency: 5  # Evaluate every N epochs
