@@ -69,8 +69,8 @@ training:
     min_lr: 1e-6  # For cosine and linear schedulers
 
   # Checkpointing
-  save_frequency: 5  # Save every N epochs
-  keep_n_checkpoints: 5
+  save_frequency: 2  # Save every N epochs
+  keep_n_checkpoints: 3
   save_mode: best  # 'best', 'all', or 'latest'
 
   # Monitoring
@@ -94,7 +94,7 @@ training:
 
 # Evaluation configuration
 eval:
-  eval_frequency: 5  # Evaluate every N epochs
+  eval_frequency: 2  # Evaluate every N epochs
   eval_batches: 50
 
 # Device and reproducibility

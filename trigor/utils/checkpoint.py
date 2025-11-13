@@ -105,7 +105,7 @@ class CheckpointManager:
 		elif self.save_mode == 'best' and metric_value is not None:
 			# Save only if new best
 			if self.is_new_best(metric_value):
-				filename = f'best_ep{episode:04d}_{self.monitor_field}_{metric_value:.4f}.chkpt'
+				filename = f'ep{episode:04d}_{self.monitor_field}_{metric_value:.4f}.chkpt'
 				path = self.checkpoint_dir / filename
 				torch.save(checkpoint, path)
 				saved_path = str(path)
