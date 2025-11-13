@@ -16,6 +16,14 @@ data:
   max_file_size: 10000
   tokenizer_config: {}
 
+  # Train/validation split
+  # Format: "phases/cycle" or "*phases/cycle" (* for shuffle)
+  # Phases support range syntax with '..' for convenience
+  # Example: "*0..7/10" = 80% for training (phases 0-7, shuffled)
+  #          "8,9/10" = 20% for validation (phases 8-9, no shuffle)
+  train_split: "*0..7/10"  # 80% training set with shuffle
+  val_split: "8,9/10"      # 20% validation set without shuffle
+
   # DataLoader settings
   loader:
     batch_size: 8
