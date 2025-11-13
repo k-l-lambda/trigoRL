@@ -16,8 +16,12 @@ from pathlib import Path
 
 import hydra
 import torch
+from dotenv import load_dotenv
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
+
+# Load environment variables from .env.local (for wandb API keys, etc.)
+load_dotenv(dotenv_path='.env.local')
 
 # Add project root to path
 project_root = Path(__file__).parent

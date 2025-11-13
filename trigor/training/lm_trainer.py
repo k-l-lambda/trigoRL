@@ -6,6 +6,7 @@ and learning rate scheduling.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -87,9 +88,13 @@ class LMTrainer:
 		# Setup wandb logger
 		self.logger = None
 		if config.training.wandb.enabled:
+			# Use environment variables as defaults for null config values
+			wandb_entity = config.training.wandb.entity or os.getenv('WANDB_ENTITY')
+			wandb_project = config.training.wandb.project or os.getenv('WANDB_PROJECT', 'trigor')
+
 			self.logger = WandbLogger(
-				project=config.training.wandb.project,
-				entity=config.training.wandb.entity,
+				project=wandb_project,
+				entity=wandb_entity,
 				name=config.training.wandb.name,
 				config=OmegaConf.to_container(config, resolve=True),
 				tags=config.training.wandb.tags,
