@@ -77,19 +77,26 @@ def preprocess_args():
 		config_file = arg_path / "config.yaml"
 		checkpoint_file = arg_path / "checkpoints" / "latest.chkpt"
 
-		if config_file.exists() and checkpoint_file.exists():
-			logger.info(f"Detected experiment directory: {arg_path}")
-			logger.info(f"Will resume training from: {checkpoint_file}")
-			_resume_dir = str(arg_path.resolve())
-			# Use a default config, actual config will be loaded from saved file
-			sys.argv[1:2] = ["--config-path=configs/training", "--config-name=trigo-gpt2"]
+		if config_file.exists():
+			if checkpoint_file.exists():
+				# Resume training from checkpoint
+				logger.info(f"Detected experiment directory: {arg_path}")
+				logger.info(f"Will resume training from: {checkpoint_file}")
+				_resume_dir = str(arg_path.resolve())
+				# Use a default config, actual config will be loaded from saved file
+				sys.argv[1:2] = ["--config-path=configs/training", "--config-name=trigo-gpt2"]
+			else:
+				# Config exists but no checkpoint - start training from scratch
+				logger.info(f"Detected experiment directory without checkpoint: {arg_path}")
+				logger.info("Will start training from scratch")
+				# Load config from experiment directory
+				config_name = "config"
+				config_dir = str(arg_path.resolve())
+				sys.argv[1:2] = [f"--config-path={config_dir}", f"--config-name={config_name}"]
 			return
 		else:
 			logger.error(f"Invalid experiment directory: {arg_path}")
-			if not config_file.exists():
-				logger.error(f"  Missing config file: {config_file}")
-			if not checkpoint_file.exists():
-				logger.error(f"  Missing checkpoint: {checkpoint_file}")
+			logger.error(f"  Missing config file: {config_file}")
 			sys.exit(1)
 
 	# Case 2: Config file path
