@@ -62,6 +62,7 @@ training:
   warmup_steps: 1000
   max_grad_norm: 1.0
   gradient_accumulation_steps: 1
+  dtype: float32  # Model dtype: float32, float16, bfloat16
   epoch_size: null  # Number of examples per epoch (null = full dataset, can repeat/subsample)
 
   # Learning rate scheduler

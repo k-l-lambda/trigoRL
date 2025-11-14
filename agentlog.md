@@ -3904,3 +3904,168 @@ Potential improvements:
 - Case normalization resolvers
 
 </details>
+
+
+> Add dtype configuration for training to support mixed precision with float16 and bfloat16.
+
+<details>
+<summary>Dtype configuration for mixed precision training implemented</summary>
+
+### Enhancement Overview
+
+Implemented dtype configuration support in the trainer to enable mixed precision training with float16 or bfloat16. This feature allows users to reduce memory usage by ~50% and potentially speed up training on modern GPUs.
+
+### Implementation
+
+**1. Dtype Parser** (`lm_trainer.py:190-219`):
+- Supports multiple formats: float32, fp32, float16, fp16, bfloat16, bf16
+- Validates dtype string and provides clear error messages
+- Returns torch.dtype object for model conversion
+
+**2. Model Conversion** (`lm_trainer.py:66-90`):
+- Parse dtype from config with float32 default
+- Convert model to specified dtype after device placement
+- Log dtype conversion for visibility
+
+**3. Configuration Updates**:
+- Added `dtype` field to all 5 training config files
+- Default: `float32` for maximum stability
+- Comment explains supported options
+
+### Testing Results
+
+**Memory Comparison:**
+```
+float32   :  20.33 MB  (baseline)
+bfloat16  :  10.17 MB  (-50% memory)
+float16   :  10.17 MB  (-50% memory)
+```
+
+**Training Tests:**
+- ✅ float32 training completed successfully
+- ✅ bfloat16 training completed successfully
+- ✅ Dtype correctly displayed in model info
+- ✅ CLI override working: `training.dtype=bfloat16`
+
+### Usage
+
+**In config file:**
+```yaml
+training:
+  dtype: float32  # float32, float16, bfloat16
+```
+
+**CLI override:**
+```bash
+python train_lm.py trigo-gpt2 training.dtype=bfloat16
+```
+
+### Recommendations
+
+- **bfloat16**: Best for training on modern GPUs (RTX 30xx, A100)
+- **float32**: Safe default, maximum stability
+- **float16**: Avoid unless specifically needed (limited range)
+
+### Files Modified
+
+- `trigor/training/lm_trainer.py` - Added dtype parsing and conversion
+- All training configs - Added dtype field
+- `examples/test_dtype_comparison.py` - Memory comparison script
+
+</details>
+
+
+> Fix Jupyter notebook error with Hydra resolver for loading training configs.
+
+<details>
+<summary>Mock Hydra resolver added to test_gpt2.ipynb for notebook compatibility</summary>
+
+### Problem
+
+When running `tests/test_gpt2.ipynb`, encountered error:
+```
+UnsupportedInterpolationType: Unsupported interpolation type hydra
+```
+
+**Root cause:**
+- Notebook loads `trigo-gpt2.yaml` which contains Hydra interpolations: `${hydra:job.config_name}`
+- Hydra resolvers only available in Hydra CLI context, not Jupyter notebooks
+- OmegaConf cannot resolve these interpolations without registered resolvers
+
+### Solution Implemented
+
+**Modified `tests/test_gpt2.ipynb` cell-5** to add mock Hydra resolver before config loading:
+
+```python
+# Register Hydra resolvers for notebook environment
+# Since we're loading trigo-gpt2.yaml directly, job.config_name should be "trigo-gpt2"
+def hydra_resolver(path: str) -> str:
+	"""Mock Hydra resolver for notebook environment."""
+	if path == "job.config_name":
+		return config_path.stem  # Returns "trigo-gpt2"
+	elif path == "runtime.cwd":
+		return str(project_root)
+	else:
+		return ""
+
+OmegaConf.register_new_resolver("hydra", hydra_resolver)
+```
+
+**Also added dtype display** to configuration printout:
+```python
+print(f"  Dtype: {cfg.training.dtype}")
+```
+
+### How It Works
+
+**Resolver execution order:**
+```
+Config File: trigo-gpt2.yaml
+    ↓
+${hydra:job.config_name} → hydra_resolver("job.config_name")
+    ↓
+config_path.stem → "trigo-gpt2"
+    ↓
+Interpolation resolved successfully
+```
+
+**Key technical details:**
+- Resolvers must be registered **before** `OmegaConf.resolve(cfg)`
+- Mock resolver returns appropriate values for notebook context
+- `config_path.stem` extracts filename without extension
+- Other Hydra paths return empty string (fallback)
+
+### Benefits
+
+**1. Notebook Compatibility:**
+- Notebooks can load Hydra configs without full Hydra context
+- No need to modify config files
+- Clean separation of concerns
+
+**2. Development Workflow:**
+- Test and debug models in notebooks
+- Use same config files as production training
+- Consistent configuration across environments
+
+**3. Reusability:**
+- Pattern can be applied to other notebooks
+- Simple to adapt for different config files
+- Minimal code overhead
+
+### Files Modified
+
+- `tests/test_gpt2.ipynb` (cell-5) - Added mock Hydra resolver and dtype display
+
+### Related Context
+
+**Why this pattern is needed:**
+- Training configs use Hydra for CLI flexibility
+- Notebooks need direct config loading for interactive development
+- Mock resolvers bridge the gap between environments
+
+**Alternative approaches (not used):**
+- Convert all configs to pure OmegaConf (loses CLI benefits)
+- Use Hydra in notebooks (heavy overhead, not natural workflow)
+- Duplicate configs for notebooks (maintenance burden)
+
+</details>

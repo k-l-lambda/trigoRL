@@ -63,12 +63,20 @@ class LMTrainer:
 		# Set environment variables from config
 		self._set_env_variables()
 
+		# Parse dtype
+		self.dtype = self._parse_dtype(config.training.get('dtype', 'float32'))
+
 		# Create model from config
 		logger.info("=" * 80)
 		logger.info("Creating Model")
 		logger.info("=" * 80)
 		self.model = self._create_model()
 		self.model = self.model.to(config.device)
+
+		# Convert model to specified dtype
+		if self.dtype != torch.float32:
+			logger.info(f"Converting model to dtype: {self.dtype}")
+			self.model = self.model.to(dtype=self.dtype)
 
 		# Print model info
 		num_params = sum(p.numel() for p in self.model.parameters())
@@ -79,6 +87,7 @@ class LMTrainer:
 		logger.info(f"  Base model: {config.model.config.model_config.type}")
 		logger.info(f"  Total parameters: {num_params:,}")
 		logger.info(f"  Trainable parameters: {num_trainable:,}")
+		logger.info(f"  Dtype: {self.dtype}")
 
 		# Training state
 		self.current_epoch = 0
@@ -176,6 +185,38 @@ class LMTrainer:
 			str_value = str(value)
 			os.environ[key] = str_value
 			logger.info(f"  {key}: {str_value}")
+
+
+	def _parse_dtype(self, dtype_str: str) -> torch.dtype:
+		"""
+		Parse dtype string to torch.dtype.
+
+		Args:
+		    dtype_str: String representation of dtype ('float32', 'float16', 'bfloat16')
+
+		Returns:
+		    torch.dtype object
+
+		Raises:
+		    ValueError: If dtype string is not supported
+		"""
+		dtype_map = {
+			'float32': torch.float32,
+			'fp32': torch.float32,
+			'float': torch.float32,
+			'float16': torch.float16,
+			'fp16': torch.float16,
+			'half': torch.float16,
+			'bfloat16': torch.bfloat16,
+			'bf16': torch.bfloat16,
+		}
+
+		dtype_str_lower = dtype_str.lower()
+		if dtype_str_lower not in dtype_map:
+			supported = ', '.join(dtype_map.keys())
+			raise ValueError(f"Unsupported dtype '{dtype_str}'. Supported: {supported}")
+
+		return dtype_map[dtype_str_lower]
 
 
 	def _create_model(self) -> nn.Module:
