@@ -3701,3 +3701,206 @@ Works seamlessly with:
 - ✅ Config persistence and resolution
 
 </details>
+
+
+> Implement custom OmegaConf resolver to strip .local suffix from config names when creating experiment directories.
+
+<details>
+<summary>Custom resolver for .local suffix removal implemented</summary>
+
+### Enhancement Overview
+
+Implemented a custom OmegaConf resolver `remove_local_suffix` that automatically strips the `.local` suffix from configuration file names when creating experiment directories. This allows using `.local` config files (e.g., for local testing) without polluting the experiment directory structure with `.local` suffixes.
+
+### Problem
+
+When using local config files like `configs/test.local.yaml`:
+- Previously, experiment directories would be named like `outputs/trigor/20251114-test.local/`
+- The `.local` suffix clutters the directory structure
+- Need a clean way to remove the suffix during directory creation
+
+### Solution Implemented
+
+**Custom OmegaConf Resolver** (`train_lm.py:30-34`):
+
+```python
+# Register custom resolver to remove .local suffix from config names
+OmegaConf.register_new_resolver(
+	"remove_local_suffix",
+	lambda s: s[:-6] if s.endswith('.local') else s
+)
+```
+
+**Resolver Logic:**
+- Takes a string as input
+- Checks if it ends with `.local`
+- If yes: removes last 6 characters (`'.local'`)
+- If no: returns string unchanged
+
+### Usage in Configuration Files
+
+**In YAML config** (`configs/test_resolver.local.yaml`):
+```yaml
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
+```
+
+**How it works:**
+1. `${hydra:job.config_name}` resolves to `test_resolver.local`
+2. `${remove_local_suffix:...}` processes it to `test_resolver`
+3. Final id: `trigor/20251114-test_resolver`
+
+### Testing Results
+
+**Test configuration:**
+- Config file: `configs/test_resolver.local.yaml`
+- Contains: `id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}`
+
+**Console output:**
+```
+[2025-11-14 16:20:04] - INFO - Experiment ID: trigor/20251114-test_resolver
+[2025-11-14 16:20:04] - INFO - Output directory: outputs/trigor/20251114-test_resolver
+```
+
+**Directory verification:**
+```bash
+$ ls -la outputs/trigor/
+drwxrwxr-x 2 camus camus 4096 11月 14 16:20 20251114-test_resolver
+```
+
+✅ Directory created **without** `.local` suffix
+✅ Config file name: `test_resolver.local.yaml`
+✅ Output directory: `20251114-test_resolver`
+
+### Benefits
+
+**1. Clean Directory Structure:**
+- Local config files don't pollute experiment directory names
+- Consistent naming regardless of config file suffix
+- Easy to identify experiment purpose from directory name
+
+**2. Flexible Configuration Management:**
+- Keep `.local` configs for local development
+- `.local` files can be in `.gitignore`
+- Production configs use same resolver pattern
+- No manual directory name cleanup needed
+
+**3. YAML-Level Control:**
+- Configuration-driven approach
+- No code-level string manipulation needed
+- Resolver can be used anywhere in YAML configs
+- Composable with other resolvers
+
+**4. Backward Compatible:**
+- Works with configs without `.local` suffix
+- Doesn't break existing configurations
+- Optional to use - only apply where needed
+
+### Usage Examples
+
+**Example 1: Local Testing Config**
+```yaml
+# configs/experiment.local.yaml
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
+```
+Result: `outputs/trigor/20251114-experiment/`
+
+**Example 2: Production Config**
+```yaml
+# configs/production.yaml
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
+```
+Result: `outputs/trigor/20251114-production/` (no change, no `.local`)
+
+**Example 3: Without Resolver**
+```yaml
+# configs/test.local.yaml
+id: trigor/${date:}-${hydra:job.config_name}
+```
+Result: `outputs/trigor/20251114-test.local/` (suffix remains)
+
+### Implementation Details
+
+**Resolver Registration Location:** `train_lm.py` (lines 30-34)
+- Registered before Hydra initialization
+- Available to all configuration files
+- Executes during OmegaConf resolution phase
+
+**String Processing:**
+```python
+lambda s: s[:-6] if s.endswith('.local') else s
+```
+- Input: `"test.local"` → Output: `"test"`
+- Input: `"production"` → Output: `"production"`
+- Simple, efficient, deterministic
+
+**Test Configuration:** `configs/test_resolver.local.yaml`
+- Complete minimal training config
+- Used for resolver verification
+- Demonstrates resolver usage pattern
+
+### Files Modified
+
+**Modified:**
+- `train_lm.py` - Added custom resolver registration (lines 30-34)
+
+**Created:**
+- `configs/test_resolver.local.yaml` - Test configuration demonstrating resolver usage
+
+### Key Technical Details
+
+**OmegaConf Resolver System:**
+- Resolvers are functions that process config values during resolution
+- Registered globally before Hydra initialization
+- Can be used in any interpolation: `${resolver_name:value}`
+- Composable with other resolvers and interpolations
+
+**Hydra Integration:**
+- `${hydra:job.config_name}` provides current config file name (without extension)
+- For `configs/test.local.yaml`, returns `"test.local"`
+- Nested resolvers process inside-out
+
+**Processing Flow:**
+```
+Config File: test_resolver.local.yaml
+    ↓
+${hydra:job.config_name} → "test_resolver.local"
+    ↓
+${remove_local_suffix:...} → "test_resolver"
+    ↓
+${date:}- → "20251114-"
+    ↓
+Final: "trigor/20251114-test_resolver"
+```
+
+### Comparison with Code-Level Approach
+
+**Previous Approach (Rejected):**
+- Manual string manipulation in `train_lm.py` and `lm_trainer.py`
+- Code scattered across multiple files
+- Harder to maintain and understand
+
+**Resolver Approach (Implemented):**
+- Configuration-driven
+- Single source of truth (resolver registration)
+- Cleaner, more maintainable
+- YAML-level control
+
+### Related Features
+
+Works seamlessly with:
+- ✅ Date resolver (`${date:}`)
+- ✅ Hydra resolvers (`${hydra:...}`)
+- ✅ Config interpolation (`${paths.root}`)
+- ✅ Experiment directory creation
+- ✅ Resume training from directory
+- ✅ Config persistence and resolution
+
+### Future Enhancements
+
+Potential improvements:
+- Add more suffix stripping resolvers (e.g., `.dev`, `.test`)
+- Generalized suffix removal: `${remove_suffix:.local}`
+- Prefix removal resolvers
+- Case normalization resolvers
+
+</details>

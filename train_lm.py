@@ -27,6 +27,12 @@ load_dotenv(dotenv_path='.env.local')
 # Register custom OmegaConf resolver for date
 OmegaConf.register_new_resolver("date", lambda: datetime.now().strftime("%Y%m%d"))
 
+# Register custom resolver to remove .local suffix from config names
+OmegaConf.register_new_resolver(
+	"remove_local_suffix",
+	lambda s: s[:-6] if s.endswith('.local') else s
+)
+
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
