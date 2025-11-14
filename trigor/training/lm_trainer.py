@@ -296,7 +296,7 @@ class LMTrainer:
 			logger.info("")
 			logger.info("Initial model metrics:")
 			logger.info(f"  Val Loss: {initial_metrics['val_loss']:.4f}")
-			logger.info(f"  Val Accuracy: {initial_metrics['val_accuracy']:.4f}")
+			logger.info(f"  Val Error: {initial_metrics['val_error']:.4f}")
 			logger.info(f"  Val Perplexity: {initial_metrics['val_perplexity']:.2f}")
 			logger.info("")
 
@@ -342,9 +342,9 @@ class LMTrainer:
 
 		# Accumulators
 		total_loss = 0.0
-		total_accuracy = 0.0
+		total_error = 0.0
 		total_perplexity = 0.0
-		total_top5_accuracy = 0.0
+		total_top5_error = 0.0
 		total_tokens = 0
 		num_batches = 0
 
@@ -385,16 +385,16 @@ class LMTrainer:
 
 			# Accumulate metrics (unscaled)
 			total_loss += outputs['loss'].item()
-			total_accuracy += outputs['accuracy'].item()
+			total_error += outputs['error'].item()
 			total_perplexity += outputs['perplexity'].item()
-			total_top5_accuracy += outputs['top5_accuracy'].item()
+			total_top5_error += outputs['top5_error'].item()
 			total_tokens += outputs['num_tokens'].item()
 			num_batches += 1
 
 			# Update progress bar
 			pbar.set_postfix({
 				'loss': f"{outputs['loss'].item():.4f}",
-				'acc': f"{outputs['accuracy'].item():.4f}",
+				'acc': f"{outputs['error'].item():.4f}",
 				'ppl': f"{outputs['perplexity'].item():.2f}",
 				'lr': f"{self.optimizer.param_groups[0]['lr']:.2e}",
 			})
@@ -427,9 +427,9 @@ class LMTrainer:
 				if self.logger and (self.global_examples % self.config.training.log_frequency == 0):
 					self.logger.log({
 						'train/loss': outputs['loss'].item(),
-						'train/accuracy': outputs['accuracy'].item(),
+						'train/error': outputs['error'].item(),
 						'train/perplexity': outputs['perplexity'].item(),
-						'train/top5_accuracy': outputs['top5_accuracy'].item(),
+						'train/top5_error': outputs['top5_error'].item(),
 						'train/learning_rate': self.optimizer.param_groups[0]['lr'],
 					}, step=self.global_examples)
 
@@ -438,9 +438,9 @@ class LMTrainer:
 		# Compute averages
 		avg_metrics = {
 			'loss': total_loss / num_batches,
-			'accuracy': total_accuracy / num_batches,
+			'error': total_error / num_batches,
 			'perplexity': total_perplexity / num_batches,
-			'top5_accuracy': total_top5_accuracy / num_batches,
+			'top5_error': total_top5_error / num_batches,
 			'tokens': total_tokens,
 		}
 
@@ -453,9 +453,9 @@ class LMTrainer:
 
 		# Accumulators
 		total_loss = 0.0
-		total_accuracy = 0.0
+		total_error = 0.0
 		total_perplexity = 0.0
-		total_top5_accuracy = 0.0
+		total_top5_error = 0.0
 		total_tokens = 0
 		num_batches = 0
 
@@ -481,16 +481,17 @@ class LMTrainer:
 
 				# Accumulate metrics
 				total_loss += outputs['loss'].item()
-				total_accuracy += outputs['accuracy'].item()
+				total_error += outputs['error'].item()
 				total_perplexity += outputs['perplexity'].item()
-				total_top5_accuracy += outputs['top5_accuracy'].item()
+				total_top5_error += outputs['top5_error'].item()
 				total_tokens += outputs['num_tokens'].item()
 				num_batches += 1
 
 				# Update progress bar
 				pbar.set_postfix({
 					'loss': f"{outputs['loss'].item():.4f}",
-					'acc': f"{outputs['accuracy'].item():.4f}",
+					'err': f"{outputs['error'].item():.4f}",
+					'acc': f"{(1 - outputs['error'].item()):.4f}",
 					'ppl': f"{outputs['perplexity'].item():.2f}",
 				})
 
@@ -499,9 +500,9 @@ class LMTrainer:
 		# Compute averages
 		avg_metrics = {
 			'val_loss': total_loss / num_batches,
-			'val_accuracy': total_accuracy / num_batches,
+			'val_error': total_error / num_batches,
 			'val_perplexity': total_perplexity / num_batches,
-			'val_top5_accuracy': total_top5_accuracy / num_batches,
+			'val_top5_error': total_top5_error / num_batches,
 			'val_tokens': total_tokens,
 		}
 
@@ -517,12 +518,12 @@ class LMTrainer:
 		logger.info("")
 		logger.info(f"Epoch {epoch+1}/{self.config.training.epochs} Summary:")
 		logger.info(f"  Train Loss: {train_metrics['loss']:.4f}")
-		logger.info(f"  Train Accuracy: {train_metrics['accuracy']:.4f}")
+		logger.info(f"  Train Error: {train_metrics['error']:.4f}")
 		logger.info(f"  Train Perplexity: {train_metrics['perplexity']:.2f}")
 
 		if val_metrics:
 			logger.info(f"  Val Loss: {val_metrics['val_loss']:.4f}")
-			logger.info(f"  Val Accuracy: {val_metrics['val_accuracy']:.4f}")
+			logger.info(f"  Val Error: {val_metrics['val_error']:.4f}")
 			logger.info(f"  Val Perplexity: {val_metrics['val_perplexity']:.2f}")
 
 

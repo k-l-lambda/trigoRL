@@ -216,11 +216,13 @@ class AttentionCausalLoss(nn.Module):
 			# Token-level accuracy
 			correct = (predictions == labels_flat) & valid_mask
 			accuracy = correct.sum().float() / valid_mask.sum().float()
+			error = 1 - accuracy
 
 			# Top-5 accuracy
 			top5_predictions = torch.topk(logits_flat, k=5, dim=-1).indices
 			top5_correct = (top5_predictions == labels_flat.unsqueeze(-1)).any(dim=-1) & valid_mask
 			top5_accuracy = top5_correct.sum().float() / valid_mask.sum().float()
+			top5_error = 1 - top5_accuracy
 
 			# Perplexity
 			perplexity = torch.exp(loss)
@@ -231,9 +233,9 @@ class AttentionCausalLoss(nn.Module):
 		# Build output dictionary
 		outputs = {
 			'loss': loss,
-			'accuracy': accuracy,
+			'error': error,
 			'perplexity': perplexity,
-			'top5_accuracy': top5_accuracy,
+			'top5_error': top5_error,
 			'num_tokens': num_tokens,
 		}
 
