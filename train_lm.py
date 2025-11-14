@@ -3,9 +3,8 @@
 Training script for attention-based language models.
 
 Usage:
-    python train_lm.py trigo-gpt2                        # Use config name
     python train_lm.py configs/training/trigo-gpt2.yaml  # Use config path
-    python train_lm.py trigo-gpt2 training.epochs=50     # With overrides
+    python train_lm.py configs/training/trigo-gpt2.yaml training.epochs=50  # With overrides
     python train_lm.py outputs/trigor/20251113-trigo-gpt2/  # Resume from experiment dir
     python train_lm.py outputs/trigor/20251113-trigo-gpt2/ training.epochs=100  # Resume with overrides
 """
@@ -16,6 +15,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+import hydra
 import torch
 from dotenv import load_dotenv
 from omegaconf import DictConfig, OmegaConf
@@ -44,66 +44,33 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def parse_arguments():
-	"""
-	Parse command-line arguments manually (without Hydra).
+# Global variable to store resume directory
+_resume_dir = None
 
-	Supports:
-	  - Positional config: train_lm.py trigo-gpt2
-	  - Config path: train_lm.py configs/training/trigo-gpt2.yaml
-	  - Experiment directory (resume): train_lm.py outputs/trigor/20251113-trigo-gpt2
-	  - Key=value overrides: train_lm.py trigo-gpt2 training.epochs=50
 
-	Returns:
-	    tuple: (config_path_or_resume_dir, overrides_dict, is_resume)
+def preprocess_args():
 	"""
+	Preprocess command-line arguments before Hydra processes them.
+	Converts positional config path/resume_dir into Hydra's expected format.
+
+	Modifies sys.argv in place to make it compatible with Hydra.
+	"""
+	global _resume_dir
+
 	if len(sys.argv) < 2 or sys.argv[1] in ['--help', '-h']:
-		print("Usage: train_lm.py <config_name_or_path_or_experiment_dir> [key=value overrides...]")
+		print("Usage: train_lm.py <config_path_or_experiment_dir> [key=value overrides...]")
 		print("\nExamples:")
-		print("  train_lm.py trigo-gpt2")
 		print("  train_lm.py configs/training/trigo-gpt2.yaml")
 		print("  train_lm.py outputs/trigor/20251113-trigo-gpt2  # Resume")
-		print("  train_lm.py trigo-gpt2 training.epochs=50")
+		print("  train_lm.py configs/training/trigo-gpt2.yaml training.epochs=50")
 		print("\nAvailable configs:")
 		for cfg in sorted(Path("configs/training").glob("*.yaml")):
 			if not cfg.name.startswith("_"):
-				print(f"  - {cfg.stem}")
+				print(f"  - {cfg.name}")
 		sys.exit(0)
 
 	first_arg = sys.argv[1]
 	arg_path = Path(first_arg)
-
-	# Parse CLI overrides (key=value arguments)
-	overrides = {}
-	for arg in sys.argv[2:]:
-		if '=' in arg:
-			key, value = arg.split('=', 1)
-			# Try to parse as number, boolean, or keep as string
-			try:
-				if value.lower() in ['true', 'false']:
-					value = value.lower() == 'true'
-				elif value.lower() == 'null' or value.lower() == 'none':
-					value = None
-				else:
-					# Try int first, then float
-					try:
-						value = int(value)
-					except ValueError:
-						try:
-							value = float(value)
-						except ValueError:
-							pass  # Keep as string
-			except:
-				pass  # Keep as string
-
-			# Set nested key using dot notation
-			keys = key.split('.')
-			current = overrides
-			for k in keys[:-1]:
-				if k not in current:
-					current[k] = {}
-				current = current[k]
-			current[keys[-1]] = value
 
 	# Case 1: Experiment directory (resume training)
 	if arg_path.is_dir():
@@ -113,7 +80,10 @@ def parse_arguments():
 		if config_file.exists() and checkpoint_file.exists():
 			logger.info(f"Detected experiment directory: {arg_path}")
 			logger.info(f"Will resume training from: {checkpoint_file}")
-			return str(arg_path.resolve()), overrides, True
+			_resume_dir = str(arg_path.resolve())
+			# Use a default config, actual config will be loaded from saved file
+			sys.argv[1:2] = ["--config-path=configs/training", "--config-name=trigo-gpt2"]
+			return
 		else:
 			logger.error(f"Invalid experiment directory: {arg_path}")
 			if not config_file.exists():
@@ -122,33 +92,24 @@ def parse_arguments():
 				logger.error(f"  Missing checkpoint: {checkpoint_file}")
 			sys.exit(1)
 
-	# Case 2: Full path to config file
+	# Case 2: Config file path
 	elif arg_path.suffix in ['.yaml', '.yml']:
 		if not arg_path.exists():
 			logger.error(f"Config file not found: {arg_path}")
 			sys.exit(1)
-		return str(arg_path), overrides, False
+		# Extract config name and directory from path
+		config_name = arg_path.stem
+		config_dir = str(arg_path.parent.resolve())
+		sys.argv[1:2] = [f"--config-path={config_dir}", f"--config-name={config_name}"]
 
-	# Case 3: Short config name (e.g., trigo-gpt2)
 	else:
-		config_path = Path("configs/training") / f"{first_arg}.yaml"
-		if not config_path.exists():
-			logger.error(f"Config file not found: {config_path}")
-			logger.error(f"Available configs in configs/training/:")
-			for cfg in Path("configs/training").glob("*.yaml"):
-				if not cfg.name.startswith("_"):
-					logger.error(f"  - {cfg.stem}")
-			sys.exit(1)
-		return str(config_path), overrides, False
+		logger.error(f"Invalid argument: {first_arg}")
+		logger.error("Please provide a config file path (.yaml) or experiment directory")
+		sys.exit(1)
 
 
-def apply_overrides(config: DictConfig, overrides: dict) -> DictConfig:
-	"""Apply override dictionary to config."""
-	if not overrides:
-		return config
-
-	override_config = OmegaConf.create(overrides)
-	return OmegaConf.merge(config, override_config)
+# Preprocess arguments before Hydra's decorator runs
+preprocess_args()
 
 
 def set_env_from_config(config: DictConfig):
@@ -252,14 +213,15 @@ def create_dataloaders(config: DictConfig) -> tuple:
 	return train_loader, val_loader
 
 
-def main():
+@hydra.main(version_base=None)
+def main(config: DictConfig):
 	"""Main training entry point."""
-	# Parse command-line arguments
-	config_path_or_dir, cli_overrides, is_resume = parse_arguments()
+	# Check if we're resuming from an experiment directory
+	is_resume = _resume_dir is not None
 
 	if is_resume:
 		# Resuming from experiment directory
-		resume_path = Path(config_path_or_dir)
+		resume_path = Path(_resume_dir)
 		saved_config_file = resume_path / "config.yaml"
 		checkpoint_file = resume_path / "checkpoints" / "latest.chkpt"
 
@@ -269,15 +231,14 @@ def main():
 		logger.info(f"Experiment directory: {resume_path}")
 		logger.info(f"Loading config from: {saved_config_file}")
 		logger.info(f"Loading checkpoint from: {checkpoint_file}")
-		if cli_overrides:
-			logger.info(f"CLI overrides: {cli_overrides}")
 		logger.info("")
 
 		# Load saved config (already resolved)
-		config = OmegaConf.load(saved_config_file)
+		saved_config = OmegaConf.load(saved_config_file)
 
-		# Apply CLI overrides if any (these take priority)
-		config = apply_overrides(config, cli_overrides)
+		# Merge with any command-line overrides (config from Hydra may have overrides)
+		# Priority: CLI overrides > saved config
+		config = OmegaConf.merge(saved_config, config)
 
 		# Use the same output directory as before
 		output_dir = resume_path
@@ -287,19 +248,7 @@ def main():
 		logger.info("=" * 80)
 		logger.info("Starting New Training")
 		logger.info("=" * 80)
-		logger.info(f"Loading config from: {config_path_or_dir}")
-		if cli_overrides:
-			logger.info(f"CLI overrides: {cli_overrides}")
 		logger.info("")
-
-		# Load config file
-		config = OmegaConf.load(config_path_or_dir)
-
-		# Apply CLI overrides if any
-		config = apply_overrides(config, cli_overrides)
-
-		# Resolve interpolations (like ${date:}, ${paths.root})
-		OmegaConf.resolve(config)
 
 		# Setup output directory based on id
 		output_dir = Path(config.paths.output) / config.id
@@ -322,6 +271,18 @@ def main():
 	config_file = output_dir / "config.yaml"
 	# Resolve all variable interpolations before saving
 	resolved_config = OmegaConf.to_container(config, resolve=True)
+
+	# Convert relative paths to absolute paths
+	if 'paths' in resolved_config:
+		for key, value in resolved_config['paths'].items():
+			if value and isinstance(value, str):
+				resolved_config['paths'][key] = str(Path(value).resolve())
+
+	if 'data' in resolved_config and 'data_dir' in resolved_config['data']:
+		data_dir = resolved_config['data']['data_dir']
+		if data_dir and isinstance(data_dir, str):
+			resolved_config['data']['data_dir'] = str(Path(data_dir).resolve())
+
 	resolved_config_obj = OmegaConf.create(resolved_config)
 	with open(config_file, 'w') as f:
 		f.write(OmegaConf.to_yaml(resolved_config_obj))
