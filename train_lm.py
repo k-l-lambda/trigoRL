@@ -125,31 +125,6 @@ def preprocess_args():
 preprocess_args()
 
 
-def set_env_from_config(config: DictConfig):
-	"""
-	Set environment variables from config.
-
-	Reads the top-level 'env' section and sets os.environ.
-	This affects the entire program execution.
-
-	Args:
-	    config: Configuration object with optional 'env' section
-	"""
-	if not config.get('env'):
-		return
-
-	env_vars = OmegaConf.to_container(config.env, resolve=True)
-	if not env_vars:
-		return
-
-	logger.info("")
-	logger.info("Setting global environment variables from config:")
-	for key, value in env_vars.items():
-		str_value = str(value)
-		os.environ[key] = str_value
-		logger.info(f"  {key}: {str_value}")
-
-
 def set_seed(seed: int, deterministic: bool = False):
 	"""Set random seeds for reproducibility."""
 	import random
@@ -323,9 +298,6 @@ def main(config: DictConfig):
 		logger.info("Resuming training...")
 		logger.info(f"Config updated at: {config_file}")
 		logger.info(f"Log file (append mode): {log_file}")
-
-	# Set global environment variables from config (affects entire program)
-	set_env_from_config(config)
 
 	# Print config
 	logger.info("")

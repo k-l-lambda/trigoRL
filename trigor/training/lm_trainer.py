@@ -168,8 +168,8 @@ class LMTrainer:
 		Set trainer-specific environment variables from config.
 
 		Reads the 'training.env' section of config and sets os.environ accordingly.
-		This only affects trainer operations, not the entire program.
-		Useful for setting trainer-specific parameters.
+		Only sets if not already set (allows external override).
+		Based on deep-starry's implementation pattern.
 		"""
 		if not self.config.training.get('env'):
 			return
@@ -181,10 +181,13 @@ class LMTrainer:
 		logger.info("")
 		logger.info("Setting trainer environment variables from config:")
 		for key, value in env_vars.items():
-			# Convert value to string (in case it's a number)
-			str_value = str(value)
-			os.environ[key] = str_value
-			logger.info(f"  {key}: {str_value}")
+			# Only set if not already set (allows external override)
+			if os.environ.get(key) is None:
+				str_value = str(value)
+				os.environ[key] = str_value
+				logger.info(f"  {key}: {str_value}")
+			else:
+				logger.info(f"  {key}: {os.environ[key]} (already set, not overriding)")
 
 
 	def _parse_dtype(self, dtype_str: str) -> torch.dtype:

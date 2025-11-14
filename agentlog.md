@@ -4069,3 +4069,140 @@ Interpolation resolved successfully
 - Duplicate configs for notebooks (maintenance burden)
 
 </details>
+
+
+> Implement environment variable setting following deep-starry's pattern.
+
+<details>
+<summary>Environment variable configuration implemented (deep-starry style)</summary>
+
+### Implementation Overview
+
+Implemented environment variable configuration following deep-starry's proven pattern: set environment variables during trainer initialization, only if not already set, allowing external override.
+
+### Changes Made
+
+**Modified `trigor/training/lm_trainer.py` (lines 166-190):**
+
+Updated `_set_env_variables()` method with deep-starry's pattern:
+
+```python
+def _set_env_variables(self):
+	"""
+	Set trainer-specific environment variables from config.
+	
+	Reads the 'training.env' section of config and sets os.environ accordingly.
+	Only sets if not already set (allows external override).
+	Based on deep-starry's implementation pattern.
+	"""
+	if not self.config.training.get('env'):
+		return
+	
+	env_vars = OmegaConf.to_container(self.config.training.env, resolve=True)
+	if not env_vars:
+		return
+	
+	logger.info("")
+	logger.info("Setting trainer environment variables from config:")
+	for key, value in env_vars.items():
+		# Only set if not already set (allows external override)
+		if os.environ.get(key) is None:
+			str_value = str(value)
+			os.environ[key] = str_value
+			logger.info(f"  {key}: {str_value}")
+		else:
+			logger.info(f"  {key}: {os.environ[key]} (already set, not overriding)")
+```
+
+**Key feature**: `if os.environ.get(key) is None:` - only sets if not already set
+
+**Updated config comment** (`configs/training/trigo-gpt2.yaml:93-96`):
+```yaml
+  # Environment variables (set during trainer initialization, only if not already set)
+  # Allows external override via shell: CUDA_VISIBLE_DEVICES=0 python train_lm.py ...
+  # Example: env: {CUDA_VISIBLE_DEVICES: "0", OMP_NUM_THREADS: "8"}
+  env: ~
+```
+
+### Testing
+
+**Test 1: Config-based setting**
+```bash
+python train_lm.py configs/test_env.local.yaml
+```
+Output:
+```
+Setting trainer environment variables from config:
+  CUDA_VISIBLE_DEVICES: 0
+  OMP_NUM_THREADS: 4
+```
+
+**Test 2: External override**
+```bash
+CUDA_VISIBLE_DEVICES=1 python train_lm.py configs/test_env.local.yaml
+```
+Output:
+```
+Setting trainer environment variables from config:
+  CUDA_VISIBLE_DEVICES: 1 (already set, not overriding)
+  OMP_NUM_THREADS: 4
+```
+
+✅ External environment variables take precedence
+✅ Config provides defaults when not set externally
+✅ Clear logging shows what's being set
+
+### Usage
+
+**In config file:**
+```yaml
+training:
+  env:
+    CUDA_VISIBLE_DEVICES: "0"
+    OMP_NUM_THREADS: "8"
+```
+
+**External override:**
+```bash
+# Override GPU selection
+CUDA_VISIBLE_DEVICES=1,2 python train_lm.py configs/training/trigo-gpt2.yaml
+
+# Multiple env vars
+CUDA_VISIBLE_DEVICES=0 OMP_NUM_THREADS=16 python train_lm.py ...
+```
+
+### Benefits
+
+**1. Simple and proven**: Uses deep-starry's battle-tested pattern
+**2. Flexible**: Allows both config-based defaults and external overrides
+**3. Safe**: Never overwrites existing environment variables
+**4. Clear**: Logs what's being set and what's being skipped
+
+### Comparison with deep-starry
+
+**deep-starry** (`starry/utils/config.py`):
+```python
+@classmethod
+def setEnv(cls, env):
+	for key, value in env.items():
+		if os.environ.get(key) is None:
+			os.environ[key] = str(value)
+			logging.info('env set: %s=%s', key, value)
+```
+
+**trigoRL** (trigor/training/lm_trainer.py):
+```python
+def _set_env_variables(self):
+	# ... validation ...
+	for key, value in env_vars.items():
+		if os.environ.get(key) is None:
+			str_value = str(value)
+			os.environ[key] = str_value
+			logger.info(f"  {key}: {str_value}")
+		else:
+			logger.info(f"  {key}: {os.environ[key]} (already set, not overriding)")
+```
+
+Same core logic with added visibility for already-set variables.
+
+</details>
