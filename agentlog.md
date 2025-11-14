@@ -3021,3 +3021,442 @@ With `eval_frequency=2, save_frequency=1`:
 </details>
 
 
+## 2025/11/14
+
+
+> Compare trainer features between deep-starry and trigoRL to identify strengths, gaps, and architectural differences.
+
+<details>
+<summary>Comprehensive trainer comparison: deep-starry vs trigoRL</summary>
+
+### Comparison Overview
+
+Conducted detailed feature comparison between two training frameworks to understand architectural differences, identify best practices, and guide future development.
+
+### Basic Statistics
+
+| Metric | deep-starry | trigoRL |
+|--------|-------------|---------|
+| **Lines of Code** | 258 | 598 |
+| **Main Classes** | 2 (Moniter, Trainer) | 1 (LMTrainer) |
+| **Helper Functions** | 4 | 0 (methods only) |
+| **Type Hints** | ❌ None | ✅ Comprehensive |
+| **Docstrings** | ❌ Minimal | ✅ Detailed |
+
+### Feature Comparison Matrix
+
+#### 1. Logging & Monitoring
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Logging Backend** | TensorBoard | Weights & Biases |
+| **Metrics Tracking** | Manual dict accumulation | Automatic via Loss wrapper |
+| **Step Unit** | Configurable (steps/examples) | Examples-based (global_examples) |
+| **Monitor Best Model** | Custom `Moniter` class | Built-in `best_val_metric` |
+| **Log Frequency** | Per epoch + custom report_step | Configurable per N examples |
+| **Artifact Upload** | ❌ | ✅ With exception handling |
+| **Experiment Naming** | Manual | Auto from config.id |
+
+**Analysis:**
+- deep-starry: Simpler TensorBoard integration, manual metric handling
+- trigoRL: Modern wandb with automatic artifact upload, richer logging, better error handling
+
+#### 2. Training Loop Control
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Epoch Size Control** | `infiniteTraverse` + `finiteTraverse` | `itertools.cycle` + `islice` |
+| **Progress Display** | tqdm | tqdm |
+| **Validation Timing** | Start of epoch | End of epoch (configurable) |
+| **Gradient Accumulation** | ❌ Not supported | ✅ Supported (`accumulation_steps`) |
+| **Mixed Precision** | ❌ | ❌ Not implemented yet |
+| **Initial Evaluation** | ❌ | ✅ Epoch 0 baseline metrics |
+
+**deep-starry Implementation:**
+```python
+def infiniteTraverse(dataset):
+    while True:
+        for batch in dataset:
+            yield batch
+
+def finiteTraverse(iter, n_iteration):
+    i = 0
+    while i < n_iteration:
+        batch = next(iter)
+        i += 1
+        yield batch
+
+# Usage
+if 'epoch_size' in self.options:
+    data_it = infiniteTraverse(training_data)
+    n_steps = self.options['epoch_size'] // batch_size
+    epoch_data = finiteTraverse(data_it, n_steps)
+```
+
+**trigoRL Implementation:**
+```python
+epoch_size = self.config.training.get('epoch_size', None)
+if epoch_size is not None:
+    batch_size = self.config.data.loader.batch_size
+    max_batches = (epoch_size + batch_size - 1) // batch_size
+    data_iterator = itertools.cycle(self.train_loader)
+    data_iterator = itertools.islice(data_iterator, max_batches)
+else:
+    max_batches = len(self.train_loader)
+    data_iterator = iter(self.train_loader)
+```
+
+**Analysis:**
+- deep-starry: Validates at epoch start, simpler loop structure
+- trigoRL: More flexible validation frequency, gradient accumulation, uses standard library
+
+#### 3. Learning Rate Scheduling
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Scheduler Integration** | External `optim` wrapper | Built-in PyTorch schedulers |
+| **Warmup Support** | Via `optim` wrapper | ✅ LinearLR warmup |
+| **Scheduler Types** | Controlled by `optim` module | 6 types: Cosine, Linear, Constant, Inverse√, Lambda, Custom |
+| **Custom Lambda** | ❌ | ✅ eval()-based custom functions |
+| **Sequential Scheduling** | ❌ | ✅ Warmup + main scheduler |
+
+**trigoRL Scheduler Types:**
+```python
+# 1. Cosine with warmup
+scheduler:
+  type: cosine
+  warmup_steps: 1000
+  min_lr: 1e-6
+
+# 2. Inverse square root (Attention is All You Need)
+scheduler:
+  type: inverse_sqrt
+  d_model: 512
+  lr_mul: 1.0
+
+# 3. Linear decay
+scheduler:
+  type: linear
+  warmup_steps: 1000
+  min_lr: 1e-6
+
+# 4. Constant (only warmup)
+scheduler:
+  type: constant
+  warmup_steps: 1000
+
+# 5. Custom lambda
+scheduler:
+  type: lambda
+  lambda_fn: "lambda step: 0.95 ** (step / 1000)"
+```
+
+**Analysis:**
+- deep-starry: Delegates to external module (simpler but less flexible)
+- trigoRL: Rich built-in support with composability (warmup + main schedule)
+
+#### 4. Checkpointing
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Checkpoint Manager** | Manual file operations | Dedicated `CheckpointManager` class |
+| **Save Modes** | 'all' or 'best' | Best + Latest |
+| **Save Frequency** | Epoch-based | Validation-based |
+| **Checkpoint Contents** | epoch, model, optim, extra | epoch, model, optim, scheduler, metrics, global_examples, validation_count |
+| **Resume Support** | ✅ Via `loadCheckpoint()` | ✅ Via `load_checkpoint()` + directory resume |
+| **Auto-load Latest** | ✅ Checks `latest.chkpt` | ✅ Via CheckpointManager |
+| **Stateful Model Support** | ✅ `extra` field for custom state | ❌ Not implemented |
+
+**deep-starry Implementation:**
+```python
+checkpoint = {
+    'epoch': epoch_i,
+    'model': self.model.deducer.state_dict(),
+    'optim': self.optimizer._optimizer.state_dict(),
+}
+if hasattr(self.model, 'need_states'):
+    checkpoint['extra'] = self.model.state_dict()
+torch.save(checkpoint, self.config.localPath('latest.chkpt'))
+```
+
+**trigoRL Implementation:**
+```python
+checkpoint = {
+    'epoch': self.current_epoch,
+    'global_step': self.global_step,
+    'global_examples': self.global_examples,
+    'validation_count': self.validation_count,
+    'model_state_dict': self.model.state_dict(),
+    'optimizer_state_dict': self.optimizer.state_dict(),
+    'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+    'best_val_metric': self.best_val_metric,
+    'config': OmegaConf.to_container(self.config, resolve=True),
+}
+self.checkpoint_manager.save_checkpoint(checkpoint, metric_value)
+```
+
+**Analysis:**
+- deep-starry: Simpler, supports stateful models (RNNs)
+- trigoRL: More comprehensive state tracking, validation-based saving prevents bugs
+
+#### 5. Optimizer Configuration
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Optimizer** | Via `optim()` factory | Direct AdamW |
+| **Weight Decay** | Configured in optim module | ✅ Explicit config |
+| **Gradient Clipping** | Likely in optim module | ✅ `max_grad_norm` |
+| **Per-param Groups** | ❌ Not visible | ❌ Not implemented |
+| **Gradient Accumulation** | ❌ | ✅ Explicit support |
+
+#### 6. Model Integration
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Model Factory** | `loadModel()` with postfix='Loss' | `make_model()` from registry |
+| **Loss Wrapper** | Implicit via postfix | Explicit (AttentionCausalLoss) |
+| **Stateful Models** | ✅ Checks `need_states` attribute | ❌ Not supported |
+| **Model Updates** | `updateStates()` method | N/A |
+
+**deep-starry Stateful Model Support:**
+```python
+# During validation
+if hasattr(self.model, 'need_states'):
+    self.model.updateStates()
+    if checkpoint is not None:
+        checkpoint['extra'] = self.model.state_dict()
+```
+
+**Analysis:**
+- deep-starry: Supports stateful models (useful for RNNs with hidden states)
+- trigoRL: Focused on transformer-based models, no state tracking needed
+
+#### 7. Configuration System
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Config System** | Custom dict-based | OmegaConf/Hydra |
+| **Environment Variables** | Via `config.setEnv()` | Via `_set_env_variables()` |
+| **Config Persistence** | `config.save()` | Manual save with resolution |
+| **Type Safety** | ❌ Plain dicts | ✅ DictConfig with type hints |
+| **CLI Overrides** | ❌ Limited | ✅ Full Hydra support |
+| **Variable Interpolation** | ❌ | ✅ `${...}` syntax |
+
+#### 8. Data Handling
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Infinite Dataset** | ✅ `infiniteTraverse()` | ✅ `itertools.cycle()` |
+| **Finite Sampling** | ✅ `finiteTraverse()` | ✅ `itertools.islice()` |
+| **Epoch Size Override** | ✅ `epoch_size` config | ✅ `epoch_size` config |
+| **Batch Size Tracking** | From config | From DataLoader |
+
+**Analysis:** Both support similar functionality, trigoRL uses standard library patterns
+
+#### 9. Metrics & Evaluation
+
+| Feature | deep-starry | trigoRL |
+|---------|-------------|---------|
+| **Metric Computation** | Manual in train/eval loops | Via Loss wrapper (accuracy, perplexity, top5) |
+| **Metric Formatting** | `print_metric()` helper | Structured logging |
+| **Validation Frequency** | Every epoch | Configurable (`eval_frequency`) |
+| **Initial Evaluation** | ❌ | ✅ Epoch 0 evaluation |
+| **Monitor Field** | Custom `Moniter` class | Built-in with mode (min/max) |
+
+**deep-starry Monitor:**
+```python
+class Moniter:
+    def __init__(self, field='loss', mode='min', best_value=None):
+        self.field = field
+        self.mode = mode
+        self.best_value = best_value
+
+    def update(self, metrics):
+        value = metrics[self.field]
+        new_record = False
+
+        if self.best_value is None:
+            new_record = True
+        elif self.mode == 'min':
+            new_record = value < self.best_value
+        elif self.mode == 'max':
+            new_record = value > self.best_value
+
+        if new_record:
+            self.best_value = value
+
+        return value, new_record
+```
+
+**trigoRL Monitor:**
+```python
+# Built into trainer
+self.best_val_metric = float('inf') if config.training.monitor.mode == 'min' else float('-inf')
+
+# During checkpoint save
+if self.config.training.monitor.mode == 'min':
+    is_best = metric_value < self.best_val_metric
+else:
+    is_best = metric_value > self.best_val_metric
+
+if is_best:
+    self.best_val_metric = metric_value
+```
+
+### Code Architecture Comparison
+
+**deep-starry (258 lines):**
+```
+Strengths:
+✅ Lightweight and easy to understand
+✅ Proven in production
+✅ Supports stateful models (RNNs)
+✅ Custom Monitor class (reusable)
+✅ Helper functions for common patterns
+
+Weaknesses:
+⚠️ No type hints (harder to maintain)
+⚠️ Manual metric handling
+⚠️ Limited scheduler options
+⚠️ No gradient accumulation
+⚠️ TensorBoard only
+```
+
+**trigoRL (598 lines):**
+```
+Strengths:
+✅ Modern Python practices
+✅ Comprehensive type hints
+✅ Rich scheduler support
+✅ Wandb integration
+✅ Gradient accumulation
+✅ Better state tracking
+✅ Example-based logging
+✅ Modular architecture
+
+Weaknesses:
+⚠️ More code to maintain
+⚠️ No stateful model support
+⚠️ No distributed training yet
+⚠️ No mixed precision yet
+```
+
+### Key Insights
+
+**1. Philosophy Difference:**
+- **deep-starry**: Minimalist, delegates complexity to external modules (optim wrapper)
+- **trigoRL**: Feature-rich, batteries-included approach
+
+**2. Maturity:**
+- **deep-starry**: Battle-tested in production, stable API
+- **trigoRL**: Recently developed, actively evolving
+
+**3. Use Case Fit:**
+- **deep-starry**: Best for rapid prototyping, RNN/LSTM models, simple projects
+- **trigoRL**: Best for reproducible research, transformer models, complex experiments
+
+**4. Extensibility:**
+- **deep-starry**: Extend via external modules (optim, model factory)
+- **trigoRL**: Extend via registry pattern and config system
+
+### Features Missing in Both
+
+**Distributed Training:**
+- Neither supports PyTorch DDP or FSDP
+- No multi-GPU training
+
+**Mixed Precision:**
+- No automatic mixed precision (AMP)
+- No float16/bfloat16 support
+
+**Advanced Features:**
+- No gradient checkpointing
+- No model profiling
+- No learning rate finder
+- No hyperparameter tuning integration
+
+### Recommendations
+
+**For trigoRL Development:**
+
+1. **Keep from deep-starry:**
+   - Stateful model support (add `need_states` check)
+   - Separate Monitor class (more reusable)
+   - Validation at epoch start (option for both)
+
+2. **Enhance current trigoRL:**
+   - Add distributed training (DDP)
+   - Add mixed precision (AMP)
+   - Add gradient checkpointing option
+   - Keep rich feature set
+
+3. **Maintain advantages:**
+   - Type hints and documentation
+   - Hydra configuration system
+   - Wandb integration
+   - Example-based logging
+
+**Best of Both Worlds:**
+```python
+class UnifiedTrainer:
+    """Combines deep-starry simplicity with trigoRL features."""
+
+    # From deep-starry
+    - Stateful model support
+    - Minimal core loop
+    - Reusable components
+
+    # From trigoRL
+    - Type hints and docs
+    - Rich scheduling
+    - Wandb logging
+    - Config-driven
+```
+
+### Code Quality Assessment
+
+**deep-starry:**
+- Lines per feature: ~65 (4 main features)
+- Code density: High (lots of logic per line)
+- Learning curve: Easy
+- Maintainability: Good (simple)
+
+**trigoRL:**
+- Lines per feature: ~86 (7 main features)
+- Code density: Medium (well-documented)
+- Learning curve: Moderate
+- Maintainability: Excellent (type hints, docs)
+
+### Performance Considerations
+
+**Training Speed:**
+- Both have similar training loop overhead
+- deep-starry slightly faster (less abstraction)
+- trigoRL gradient accumulation can be slower
+
+**Memory Usage:**
+- Similar for basic training
+- trigoRL additional state tracking: negligible (~100 bytes)
+- Gradient accumulation in trigoRL can save memory
+
+**Scalability:**
+- deep-starry: Good for single GPU
+- trigoRL: Better prepared for multi-GPU (structured state)
+
+### Conclusion
+
+**Summary:**
+- **deep-starry**: Proven, lightweight, practical for quick experiments
+- **trigoRL**: Modern, feature-rich, better for reproducible research
+
+**Recommendation:**
+Continue with trigoRL's approach but consider adding:
+1. Stateful model support from deep-starry
+2. Option for simpler "lite" mode
+3. Distributed training capabilities
+4. Keep current strengths (types, docs, wandb)
+
+**Final Assessment:**
+trigoRL represents a well-architected, production-ready training framework with room to incorporate deep-starry's stateful model support. The additional complexity (598 vs 258 lines) is justified by features like gradient accumulation, rich scheduling, and better monitoring.
+
+</details>
