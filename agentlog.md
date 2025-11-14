@@ -3460,3 +3460,244 @@ Continue with trigoRL's approach but consider adding:
 trigoRL represents a well-architected, production-ready training framework with room to incorporate deep-starry's stateful model support. The additional complexity (598 vs 258 lines) is justified by features like gradient accumulation, rich scheduling, and better monitoring.
 
 </details>
+
+
+> Implement wandb run resuming so that resumed training logs to the same wandb run instead of creating a new one.
+
+<details>
+<summary>Wandb run resuming implemented for continuous logging</summary>
+
+### Enhancement Overview
+
+Implemented automatic wandb run resuming so that when training is resumed from a checkpoint, metrics continue logging to the same wandb run instead of creating a new one. This maintains continuous training curves across multiple sessions.
+
+### Problem
+
+Previously, when resuming training from an experiment directory:
+- A new wandb run was created each time
+- Training metrics were split across multiple runs
+- Difficult to see the complete training curve
+- Loss tracking of overall experiment progress
+
+### Solution Implemented
+
+**1. Enhanced WandbLogger** (`trigor/utils/logger.py:20-72`)
+
+Added resume capability with `run_id` and `resume` parameters:
+
+```python
+def __init__(
+    self,
+    project: str,
+    entity: Optional[str] = None,
+    name: Optional[str] = None,
+    config: Optional[Dict[str, Any]] = None,
+    tags: Optional[list] = None,
+    enabled: bool = True,
+    run_id: Optional[str] = None,  # NEW: Resume existing run
+    resume: Optional[str] = None,  # NEW: Resume mode
+):
+    # ...
+    init_kwargs = {
+        'project': project,
+        'entity': entity,
+        'name': name,
+        'config': config,
+        'tags': tags or [],
+        'reinit': True,
+    }
+
+    # Add resume parameters if provided
+    if run_id is not None:
+        init_kwargs['id'] = run_id
+        init_kwargs['resume'] = resume or 'allow'
+        logger.info(f"Resuming wandb run: {run_id} (mode: {init_kwargs['resume']})")
+
+    self.run = wandb.init(**init_kwargs)
+```
+
+**2. Enhanced LMTrainer** (`trigor/training/lm_trainer.py`)
+
+Added run_id tracking and checkpoint persistence:
+
+**Constructor (lines 43-120):**
+```python
+def __init__(
+    self,
+    config: DictConfig,
+    train_loader: DataLoader,
+    val_loader: Optional[DataLoader] = None,
+    resume_wandb_id: Optional[str] = None,  # NEW parameter
+):
+    # ...
+    self.wandb_run_id = None
+    if config.training.wandb.enabled:
+        self.logger = WandbLogger(
+            project=wandb_project,
+            entity=wandb_entity,
+            name=wandb_name,
+            config=OmegaConf.to_container(config, resolve=True),
+            tags=config.training.wandb.tags,
+            enabled=True,
+            run_id=resume_wandb_id,  # Pass resume ID
+            resume='allow' if resume_wandb_id else None,
+        )
+        # Store wandb run ID for checkpoint saving
+        if self.logger.run:
+            self.wandb_run_id = self.logger.run.id
+```
+
+**Checkpoint save (line 545):**
+```python
+checkpoint = {
+    'epoch': self.current_epoch,
+    'global_step': self.global_step,
+    'global_examples': self.global_examples,
+    'validation_count': self.validation_count,
+    'model_state_dict': self.model.state_dict(),
+    'optimizer_state_dict': self.optimizer.state_dict(),
+    'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
+    'best_val_metric': self.best_val_metric,
+    'wandb_run_id': self.wandb_run_id,  # NEW: Save run ID
+    'config': OmegaConf.to_container(self.config, resolve=True),
+}
+```
+
+**3. Enhanced train_lm.py** (lines 228-254)
+
+Added automatic run_id extraction and passing:
+
+```python
+def main(config: DictConfig):
+    is_resume = _resume_dir is not None
+    resume_wandb_id = None
+
+    if is_resume:
+        # ...
+        checkpoint_file = resume_path / "checkpoints" / "latest.chkpt"
+
+        # Load checkpoint to get wandb run_id
+        if checkpoint_file.exists():
+            checkpoint = torch.load(checkpoint_file, map_location='cpu')
+            resume_wandb_id = checkpoint.get('wandb_run_id', None)
+            if resume_wandb_id:
+                logger.info(f"Found wandb run ID in checkpoint: {resume_wandb_id}")
+                logger.info("Will resume logging to existing wandb run")
+            del checkpoint  # Free memory
+
+    # ...
+
+    # Create trainer with resume_wandb_id
+    trainer = LMTrainer(
+        config=config,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        resume_wandb_id=resume_wandb_id,  # Pass to trainer
+    )
+```
+
+### Testing Results
+
+**Initial Training:**
+```
+wandb: setting up run 8oycyhrs
+wandb: Syncing run trigor/20251114-trigo-gpt2
+wandb: 🚀 View run at https://wandb.ai/k-l-lambda-org/trigor/runs/8oycyhrs
+```
+
+**Checkpoint Verification:**
+```python
+>>> checkpoint = torch.load('outputs/trigor/20251114-trigo-gpt2/checkpoints/latest.chkpt')
+>>> checkpoint['wandb_run_id']
+'8oycyhrs'
+```
+
+**Resume Training:**
+```
+[2025-11-14 15:56:18] - INFO - Found wandb run ID in checkpoint: 8oycyhrs
+[2025-11-14 15:56:18] - INFO - Will resume logging to existing wandb run
+[2025-11-14 15:56:18] - INFO - Resuming wandb run: 8oycyhrs (mode: allow)
+
+wandb: setting up run 8oycyhrs
+wandb: Resuming run trigor/20251114-trigo-gpt2
+wandb: 🚀 View run at https://wandb.ai/k-l-lambda-org/trigor/runs/8oycyhrs
+```
+
+✅ Same run ID across sessions
+✅ Metrics continue in the same run
+✅ Complete training curve visible
+✅ No duplicate runs created
+
+### Key Features
+
+**1. Automatic Detection:**
+- Resume training automatically detects existing wandb run_id
+- No manual intervention required
+- Works seamlessly with experiment directory resume
+
+**2. Backward Compatible:**
+- Old checkpoints without `wandb_run_id` default to None
+- Creates new run if no previous run_id found
+- No breaking changes to existing workflows
+
+**3. Resume Modes:**
+- `'allow'`: Resume if run exists, create new otherwise (default)
+- `'must'`: Must resume, fail if run doesn't exist
+- `'never'`: Always create new run
+
+**4. Continuous Logging:**
+- Metrics continue from previous `global_examples` count
+- No gap in training curves
+- Easy to compare pre/post resume performance
+
+### Benefits
+
+**1. Experiment Tracking:**
+- Single run contains complete training history
+- Easier to analyze full experiment lifecycle
+- Clean wandb dashboard without duplicate runs
+
+**2. Resume-Friendly:**
+- Training interruptions don't fragment metrics
+- Long runs spanning multiple sessions stay organized
+- Checkpoint-based workflow fully supported
+
+**3. Debugging:**
+- Clear log messages indicate resume status
+- Run ID visible in console output
+- Easy to verify correct run is being used
+
+### Usage Examples
+
+**Standard Resume:**
+```bash
+# Initial training
+python train_lm.py configs/training/trigo-gpt2.yaml training.epochs=10
+
+# Resume (automatically uses same wandb run)
+python train_lm.py outputs/trigor/20251114-trigo-gpt2/ training.epochs=20
+```
+
+**Check Run ID:**
+```python
+import torch
+checkpoint = torch.load('outputs/.../latest.chkpt', map_location='cpu')
+print(f"Wandb run ID: {checkpoint['wandb_run_id']}")
+```
+
+### Files Modified
+
+- `trigor/utils/logger.py` - Added `run_id` and `resume` parameters
+- `trigor/training/lm_trainer.py` - Added `resume_wandb_id` parameter and run_id tracking
+- `train_lm.py` - Added automatic run_id extraction from checkpoint
+
+### Related Features
+
+Works seamlessly with:
+- ✅ Resume training from experiment directory
+- ✅ Checkpoint management (best/latest)
+- ✅ Example-based logging with `global_examples`
+- ✅ Validation-based checkpoint saving
+- ✅ Config persistence and resolution
+
+</details>
