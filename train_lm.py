@@ -225,6 +225,7 @@ def main(config: DictConfig):
 	"""Main training entry point."""
 	# Check if we're resuming from an experiment directory
 	is_resume = _resume_dir is not None
+	resume_wandb_id = None
 
 	if is_resume:
 		# Resuming from experiment directory
@@ -239,6 +240,15 @@ def main(config: DictConfig):
 		logger.info(f"Loading config from: {saved_config_file}")
 		logger.info(f"Loading checkpoint from: {checkpoint_file}")
 		logger.info("")
+
+		# Load checkpoint to get wandb run_id
+		if checkpoint_file.exists():
+			checkpoint = torch.load(checkpoint_file, map_location='cpu')
+			resume_wandb_id = checkpoint.get('wandb_run_id', None)
+			if resume_wandb_id:
+				logger.info(f"Found wandb run ID in checkpoint: {resume_wandb_id}")
+				logger.info("Will resume logging to existing wandb run")
+			del checkpoint  # Free memory
 
 		# Load saved config (already resolved)
 		saved_config = OmegaConf.load(saved_config_file)
@@ -347,6 +357,7 @@ def main(config: DictConfig):
 		config=config,
 		train_loader=train_loader,
 		val_loader=val_loader,
+		resume_wandb_id=resume_wandb_id,  # Pass wandb run ID for resume
 	)
 
 	# Resume from checkpoint if specified

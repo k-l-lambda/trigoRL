@@ -45,6 +45,7 @@ class LMTrainer:
 		config: DictConfig,
 		train_loader: DataLoader,
 		val_loader: Optional[DataLoader] = None,
+		resume_wandb_id: Optional[str] = None,
 	):
 		"""
 		Initialize LM trainer.
@@ -53,6 +54,7 @@ class LMTrainer:
 		    config: OmegaConf configuration object
 		    train_loader: Training data loader
 		    val_loader: Optional validation data loader
+		    resume_wandb_id: Wandb run ID to resume (if continuing from checkpoint)
 		"""
 		self.config = config
 		self.train_loader = train_loader
@@ -93,6 +95,7 @@ class LMTrainer:
 
 		# Setup wandb logger
 		self.logger = None
+		self.wandb_run_id = None
 		if config.training.wandb.enabled:
 			# Use environment variables as defaults for null config values
 			wandb_entity = os.getenv('WANDB_ENTITY')
@@ -107,7 +110,12 @@ class LMTrainer:
 				config=OmegaConf.to_container(config, resolve=True),
 				tags=config.training.wandb.tags,
 				enabled=True,
+				run_id=resume_wandb_id,  # Resume existing run if provided
+				resume='allow' if resume_wandb_id else None,
 			)
+			# Store wandb run ID for checkpoint saving
+			if self.logger.run:
+				self.wandb_run_id = self.logger.run.id
 			# Watch model (gradients and parameters)
 			self.logger.watch_model(self.model, log='all', log_freq=config.training.log_frequency)
 
@@ -538,6 +546,7 @@ class LMTrainer:
 			'optimizer_state_dict': self.optimizer.state_dict(),
 			'scheduler_state_dict': self.scheduler.state_dict() if self.scheduler else None,
 			'best_val_metric': self.best_val_metric,
+			'wandb_run_id': self.wandb_run_id,  # Save wandb run ID for resume
 			'config': OmegaConf.to_container(self.config, resolve=True),
 		}
 

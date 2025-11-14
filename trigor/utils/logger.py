@@ -25,6 +25,8 @@ class WandbLogger:
 		config: Optional[Dict[str, Any]] = None,
 		tags: Optional[list] = None,
 		enabled: bool = True,
+		run_id: Optional[str] = None,
+		resume: Optional[str] = None,
 	):
 		"""
 		Initialize wandb logger.
@@ -36,6 +38,8 @@ class WandbLogger:
 		    config: Configuration dictionary to log
 		    tags: Experiment tags
 		    enabled: If False, disable wandb logging
+		    run_id: Wandb run ID to resume (if resuming existing run)
+		    resume: Resume mode ('allow', 'must', 'never', or None)
 		"""
 		self.enabled = enabled
 
@@ -47,15 +51,23 @@ class WandbLogger:
 		if entity is None:
 			entity = os.getenv('WANDB_ENTITY')
 
-		# Initialize wandb
-		self.run = wandb.init(
-			project=project,
-			entity=entity,
-			name=name,
-			config=config,
-			tags=tags or [],
-			reinit=True,
-		)
+		# Initialize wandb with optional resume support
+		init_kwargs = {
+			'project': project,
+			'entity': entity,
+			'name': name,
+			'config': config,
+			'tags': tags or [],
+			'reinit': True,
+		}
+
+		# Add resume parameters if provided
+		if run_id is not None:
+			init_kwargs['id'] = run_id
+			init_kwargs['resume'] = resume or 'allow'
+			logger.info(f"Resuming wandb run: {run_id} (mode: {init_kwargs['resume']})")
+
+		self.run = wandb.init(**init_kwargs)
 
 		print(f"Wandb initialized: {self.run.url}")
 
@@ -128,6 +140,8 @@ class WandbLogger:
 		"""Context manager entry."""
 		return self
 
-	def __exit__(self, exc_type, exc_val, exc_tb):  # noqa: ARG002
+	def __exit__(self, exc_type, exc_val, exc_tb):
 		"""Context manager exit."""
+		# Unused parameters required by context manager protocol
+		_ = exc_type, exc_val, exc_tb
 		self.finish()
