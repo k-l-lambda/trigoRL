@@ -4206,3 +4206,199 @@ def _set_env_variables(self):
 Same core logic with added visibility for already-set variables.
 
 </details>
+
+
+## 2025/11/15
+
+
+> Develop ONNX exporting script to export trained models for cross-platform deployment.
+
+<details>
+<summary>ONNX export pipeline implemented with full HuggingFace compatibility</summary>
+
+### Implementation Summary
+
+Created a complete ONNX export pipeline (`exportOnnx.py`) that exports trained TrigoRL models (GPT-2, LLaMA, RWKV, xLSTM) to ONNX format for cross-platform deployment and inference. The script handles checkpoint loading, model wrapping, and ONNX conversion with support for dynamic batch/sequence sizes.
+
+### Components Implemented
+
+**1. ONNX Export Script** (`exportOnnx.py`)
+- Accepts training directory as input
+- Loads model from checkpoint (latest, best, or specific)
+- Exports to ONNX with configurable options
+- CLI interface with argparse
+
+**2. Test Suite** (`tests/test_onnx_export.py`)
+- Creates minimal GPT-2 model and checkpoint
+- Tests static and dynamic axis export
+- Verifies ONNX model validity
+- Tests ONNX Runtime inference
+- All 4 tests passing ✓
+
+**3. Example Script** (`examples/example_onnx_export.py`)
+- Demonstrates export usage
+- Shows inference with ONNX Runtime
+- Batch inference with variable sizes
+- Complete usage examples
+
+### Key Features
+
+**Checkpoint Loading**:
+```python
+exporter = ONNXExporter(training_dir)
+model, checkpoint = exporter.load_model(checkpoint_name='latest')  # or 'best'
+```
+
+**Model Wrapping**:
+- Wraps HuggingFace models to return only logits
+- Handles `transformers.cache_utils.DynamicCache` output
+- Compatible with torch.onnx.export JIT tracing
+
+**ONNX Export**:
+```python
+exporter.export_to_onnx(
+    model=model,
+    output_path='model.onnx',
+    batch_size=1,
+    seq_len=256,
+    dynamic_batch=True,   # variable batch size
+    dynamic_seq=True,     # variable sequence length
+    opset_version=14,
+)
+```
+
+**Dynamic Axes Support**:
+- Enable `dynamic_batch` for variable batch sizes
+- Enable `dynamic_seq` for variable sequence lengths
+- Allows flexible inference without re-export
+
+### Usage Examples
+
+**Basic export**:
+```bash
+python exportOnnx.py training_output/trigo-gpt2-20250115_120000
+```
+
+**Export best checkpoint**:
+```bash
+python exportOnnx.py training_output/trigo-gpt2-20250115_120000 --checkpoint best
+```
+
+**Export with dynamic axes**:
+```bash
+python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \
+    --dynamic-batch --dynamic-seq --seq-len 512
+```
+
+**Custom output path**:
+```bash
+python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \
+    --checkpoint ep0050_loss_0.1234.chkpt \
+    --output my_model.onnx
+```
+
+### ONNX Runtime Inference
+
+```python
+import onnxruntime as ort
+import numpy as np
+
+# Create session
+session = ort.InferenceSession('model.onnx')
+
+# Prepare input
+input_ids = np.random.randint(0, 259, (1, 256), dtype=np.int64)
+
+# Run inference
+outputs = session.run(['logits'], {'input_ids': input_ids})
+logits = outputs[0]  # Shape: (batch_size, seq_len, vocab_size)
+```
+
+### Technical Details
+
+**Model Wrapper**:
+- Inner class wrapping PyTorch model
+- Extracts logits from HuggingFace output (BaseModelOutput, dict, tuple)
+- Ensures clean tensor output for ONNX export
+
+**Export Configuration**:
+- Uses `dynamo=False` to force JIT trace (legacy API)
+- Avoids torch.export issues with transformers.cache_utils.DynamicCache
+- Filters TracerWarnings for clean output
+- Opset version 14 (default, configurable)
+
+**Checkpoint Structure**:
+```python
+checkpoint = {
+    'model_state_dict': ...,  # Loaded into model
+    'epoch': ...,
+    'global_step': ...,
+    'config': ...,  # Used for model creation
+}
+```
+
+**Directory Structure**:
+```
+training_output/trigo-gpt2-20250115_120000/
+├── config.yaml                   # Model configuration
+├── latest.chkpt                  # Latest checkpoint
+├── ep0050_loss_0.1234.chkpt     # Best checkpoints
+└── gpt2_ep0050.onnx             # Exported ONNX model (auto-generated name)
+```
+
+### Dependencies
+
+Added to environment:
+```bash
+pip install onnx onnxscript onnxruntime
+```
+
+**Package versions**:
+- onnx: 1.19.1
+- onnxscript: 0.5.6
+- onnxruntime: 1.23.2
+
+### Testing Results
+
+All tests passed successfully:
+- ✓ Test 1: Export latest checkpoint (1.93 MB)
+- ✓ Test 2: Export with dynamic axes (1.97 MB)
+- ✓ Test 3: Verify ONNX model validity
+- ✓ Test 4: Verify ONNX Runtime inference (output shape: 1×256×259)
+
+### Benefits
+
+1. **Cross-platform deployment**: ONNX models run on various frameworks (TensorFlow, ONNX Runtime, TensorRT, etc.)
+2. **Inference optimization**: ONNX Runtime provides optimized inference
+3. **Language agnostic**: Use exported models in C++, JavaScript, etc.
+4. **Production ready**: Tested with HuggingFace transformers
+5. **Flexible input sizes**: Dynamic axes allow variable batch/sequence lengths
+6. **Model portability**: Export trained PyTorch models for deployment
+7. **Game engine integration**: Ready for integration with Trigo game engine via ONNX
+
+### Integration with Trigo
+
+The exported ONNX models are ready for integration with the Trigo game engine:
+
+**Potential integration paths**:
+1. Backend API (Python): Load ONNX model with onnxruntime for AI player
+2. Frontend inference (JavaScript): Use onnxruntime-web for client-side AI
+3. C++ engine: Use ONNX Runtime C++ API for native integration
+
+**Inference flow**:
+```
+Game Board State → Tokenize → ONNX Model → Logits → Decode → Move Selection
+```
+
+### Files Modified/Created
+
+**New files**:
+- `exportOnnx.py` - Main ONNX export script (400+ lines)
+- `tests/test_onnx_export.py` - Test suite for export functionality
+- `examples/example_onnx_export.py` - Usage examples and inference demos
+
+**Modified files**:
+- Environment: Added onnx, onnxscript, onnxruntime packages
+
+
+</details>
