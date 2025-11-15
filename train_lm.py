@@ -232,11 +232,7 @@ def main(config: DictConfig):
 			del checkpoint  # Free memory
 
 		# Load saved config (already resolved)
-		saved_config = OmegaConf.load(saved_config_file)
-
-		# Merge with any command-line overrides (config from Hydra may have overrides)
-		# Priority: CLI overrides > saved config
-		config = OmegaConf.merge(saved_config, config)
+		config = OmegaConf.load(saved_config_file)
 
 		# Use the same output directory as before
 		output_dir = resume_path
