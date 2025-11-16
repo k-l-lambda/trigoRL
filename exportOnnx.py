@@ -29,6 +29,8 @@ Examples:
 """
 
 import argparse
+import glob
+import re
 import logging
 import sys
 from pathlib import Path
@@ -78,11 +80,12 @@ class ONNXExporter:
 
 		# Initialize checkpoint manager
 		self.checkpoint_mgr = CheckpointManager(
-			checkpoint_dir=str(self.training_dir),
+			checkpoint_dir=str(self.training_dir / "checkpoints"),
 			save_mode=self.config.training.save_mode,
 			monitor_field=self.config.training.monitor.field,
 			monitor_mode=self.config.training.monitor.mode,
 		)
+
 
 
 	def load_model(self, checkpoint_name: Optional[str] = None) -> Tuple[nn.Module, Dict]:
@@ -349,8 +352,8 @@ def parse_args():
 	parser.add_argument(
 		'--checkpoint',
 		type=str,
-		default='latest',
-		help='Checkpoint to export: "latest", "best", or specific filename (default: latest)'
+		default='best',
+		help='Checkpoint to export: "latest", "best", or specific filename (default: best)'
 	)
 
 	parser.add_argument(

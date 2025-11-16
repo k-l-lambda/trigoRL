@@ -1,6 +1,7 @@
 """Checkpoint management for TrigoRL."""
 
 import glob
+import re
 import os
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -117,7 +118,7 @@ class CheckpointManager:
 
 	def _cleanup_old_checkpoints(self) -> None:
 		"""Remove old checkpoints, keeping only best N."""
-		pattern = f'best_ep*_{self.monitor_field}_*.chkpt'
+		pattern = f'ep*_{self.monitor_field}_*.chkpt'
 		checkpoints = glob.glob(str(self.checkpoint_dir / pattern))
 
 		if len(checkpoints) <= self.keep_n:
@@ -184,12 +185,20 @@ class CheckpointManager:
 		Returns:
 		    Path to best checkpoint, or None if none exist
 		"""
-		pattern = f'best_ep*_{self.monitor_field}_*.chkpt'
+		pattern = f'ep*_{self.monitor_field}_*.chkpt'
 		checkpoints = glob.glob(str(self.checkpoint_dir / pattern))
 
 		if not checkpoints:
 			return None
 
-		# Return most recent (highest episode number)
-		checkpoints.sort()
-		return checkpoints[-1]
+		# Extract episode number and return highest
+		max_ep = -1
+		best_checkpoint = None
+		for ckpt in checkpoints:
+			match = re.search(r'ep(\d+)_', os.path.basename(ckpt))
+			if match:
+				ep_num = int(match.group(1))
+				if ep_num > max_ep:
+					max_ep = ep_num
+					best_checkpoint = ckpt
+		return best_checkpoint
