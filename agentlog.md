@@ -4402,3 +4402,119 @@ Game Board State → Tokenize → ONNX Model → Logits → Decode → Move Sele
 
 
 </details>
+
+
+## 2025/11/16
+
+> Test running Jupyter notebook server with env `/root/work/trigoRL/env` for validation notebook. Fix ONNX export script errors encountered during execution. Change default checkpoint from 'latest' to 'best' (highest epoch number).
+
+<details>
+<summary>Fixed ONNX export bugs and improved checkpoint selection logic</summary>
+
+### Jupyter Notebook Server
+
+Successfully started Jupyter notebook server for testing:
+- **Environment**: `/root/work/trigoRL/env`
+- **Server URL**: `http://127.0.0.1:8888/tree`
+- **Target notebook**: `tests/test_gpt2_validate.ipynb`
+- Server running without errors with authentication disabled for local testing
+
+### ONNX Export Bugs Fixed
+
+Discovered and fixed multiple issues in `exportOnnx.py`:
+
+**Issue 1: Config path mismatch (Line 82)**
+- **Error**: `Missing key checkpoint` - Expected `training.checkpoint.save_mode`
+- **Root cause**: Config structure has `training.save_mode` (flat), not nested
+- **Fix**: Changed to `self.config.training.save_mode`
+
+**Issue 2: Checkpoint directory path (Line 81, 112)**
+- **Error**: Checkpoints not found in training root directory
+- **Root cause**: Checkpoints stored in `checkpoints/` subdirectory
+- **Fix**: Updated to `self.training_dir / "checkpoints"`
+
+**Issue 3: Vocab size config path (Line 208)**
+- **Error**: `Missing key vocab_size` at `model.config.model_config.vocab_size`
+- **Root cause**: Config nested deeper as `model.config.model_config.config.vocab_size`
+- **Fix**: Added missing `.config` level
+
+**Issue 4: Model type path (Line 306)**
+- **Error**: Wrong path to model type for naming exported file
+- **Fix**: Changed to `model.config.model_config.type`
+
+**Issue 5: AttentionCausalLoss wrapper (Line 189)**
+- **Error**: `AttentionCausalLoss.forward() missing required argument: 'labels'`
+- **Root cause**: Trying to export wrapper that requires labels for training
+- **Fix**: Added unwrapping logic `self.model.model` to get base model
+
+### Checkpoint Selection Logic Improvement
+
+**Initial bug in CheckpointManager** (`trigor/utils/checkpoint.py`):
+- `save()` method creates files: `ep{N}_{metric}_{value}.chkpt` (no prefix)
+- `get_best_checkpoint()` searches: `best_ep*_{metric}*.chkpt` (with prefix)
+- Mismatch prevented finding any checkpoints
+
+**Final solution**:
+- Updated `get_best_checkpoint()` to find checkpoint with **highest epoch number**
+- Removed "best_" prefix requirement (simpler, more intuitive)
+- Changed from string sort to numeric sort by parsing `ep(\d+)` with regex
+- Added `import re` to checkpoint.py
+
+**Logic**: Best checkpoint = most trained checkpoint (highest epoch)
+
+### Changes to exportOnnx.py
+
+1. **Default checkpoint changed** (Line 352):
+   - From: `default='latest'`
+   - To: `default='best'`
+   - Help text updated accordingly
+
+2. **Removed custom workaround**:
+   - Initially added `_find_best_checkpoint()` method as workaround
+   - After fixing CheckpointManager, removed custom method
+   - Now uses `CheckpointManager.get_best_checkpoint()` properly
+
+### Testing Results
+
+**Successful export**:
+```bash
+python -m exportOnnx /root/training/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
+    --output /tmp/GPT2CausalLM_best.onnx
+```
+
+**Output**:
+- INFO - Using best checkpoint
+- INFO - Loading checkpoint: .../checkpoints/ep0015_val_loss_1.8120.chkpt
+- INFO - ✓ ONNX export successful!
+- File size: 2.33 MB
+
+**Checkpoint correctly identified**:
+- Available checkpoints: ep0000 through ep0015
+- Selected: ep0015 (highest epoch number) ✓
+
+### Files Modified
+
+**exportOnnx.py**:
+- Fixed 5 config path bugs
+- Changed default checkpoint to 'best'
+- Removed temporary workaround code
+
+**trigor/utils/checkpoint.py**:
+- Added `import re`
+- Rewrote `get_best_checkpoint()` to find highest epoch number
+- Fixed `_cleanup_old_checkpoints()` pattern matching
+
+### Usage
+
+```bash
+# Export best checkpoint (default - highest epoch)
+python -m exportOnnx <training_dir> --output model.onnx
+
+# Export latest checkpoint
+python -m exportOnnx <training_dir> --checkpoint latest --output model.onnx
+
+# Export specific checkpoint
+python -m exportOnnx <training_dir> --checkpoint ep0010_*.chkpt --output model.onnx
+```
+
+</details>
