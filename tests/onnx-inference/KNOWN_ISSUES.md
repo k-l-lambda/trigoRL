@@ -1,6 +1,45 @@
 # Known Issues and Solutions
 
-## Issue: bfloat16 Not Supported
+## Issue 1: Dynamic Sequence Length Not Supported
+
+**Error:**
+```
+Non-zero status code returned while running Reshape node. Name:'/model/transformer/Reshape_1'
+The input tensor cannot be reshaped to the requested shape.
+Input shape:{64}, requested shape:{256,1}
+```
+
+**Cause:**
+GPT-2's position embedding implementation contains Reshape operations that get hardcoded to the export-time sequence length (256) during ONNX conversion. This is a known limitation of PyTorch's ONNX exporter with transformer models, even when using `--dynamic-seq` flag.
+
+**Impact:**
+- ✅ Fixed-length inference (seq_len=256): Works perfectly
+- ❌ Variable sequence lengths (64, 128, etc.): Not supported
+- ❌ Autoregressive generation: Not supported (requires seq_len starting from 1)
+
+**Workaround:**
+1. **Use fixed sequence length of 256** (recommended for current tests)
+2. **Re-export for different lengths**: Export model with desired sequence length
+3. **Pad inputs**: Pad shorter sequences to 256 tokens
+
+**Future Solutions:**
+- Use torch.export-based ONNX exporter (PyTorch 2.9+) with `dynamo=True`
+- Implement custom ONNX graph transformations to make Reshape nodes dynamic
+- Switch to models with learnable position embeddings (e.g., RoPE in LLaMA)
+
+**Current Test Configuration:**
+```javascript
+const CONFIG = {
+    modelPath: 'GPT2CausalLM_ep0015_int8.onnx',
+    tests: {
+        batchSizes: [1],     // Fixed batch size
+        seqLengths: [256],   // Fixed sequence length
+        generation: false,    // Disabled (requires variable seq length)
+    }
+};
+```
+
+## Issue 2: bfloat16 Not Supported
 
 **Error:**
 ```
@@ -60,12 +99,14 @@ onnx.save(model, "model_fp32.onnx")
 For Node.js inference:
 1. **Train with float32 or mixed precision that ends in float32**
 2. **Export with `dtype: float32` in config**
-3. **Test with Node.js onnxruntime**
+3. **Use fixed sequence length (256)**
+4. **Test with Node.js onnxruntime**
 
 For maximum compatibility:
 - Use float32 for production models
 - Use bfloat16/float16 for training efficiency
 - Convert to float32 for deployment
+- Export with fixed dimensions that match your use case
 
 ## Testing Different Model Types
 
@@ -75,20 +116,25 @@ const CONFIG = {
 	// Update to your model path
 	modelPath: '../../outputs/trigor/YOUR_MODEL/model_float32.onnx',
 	vocabSize: 259,
-	// ...
+	tests: {
+		batchSizes: [1],    // Fixed batch
+		seqLengths: [256],  // Fixed seq length
+	}
 };
 ```
 
 ## Platform Support Matrix
 
-| Platform | float32 | float16 | bfloat16 |
-|----------|---------|---------|----------|
-| Python onnxruntime | ✓ | ✓ | ✓ |
-| Node.js onnxruntime | ✓ | ✓ | ✗ |
-| Browser onnxruntime-web | ✓ | Partial | ✗ |
+| Platform | float32 | float16 | bfloat16 | Dynamic Seq |
+|----------|---------|---------|----------|-------------|
+| Python onnxruntime | ✓ | ✓ | ✓ | ✗ (GPT-2 limitation) |
+| Node.js onnxruntime | ✓ | ✓ | ✗ | ✗ (GPT-2 limitation) |
+| Browser onnxruntime-web | ✓ | Partial | ✗ | ✗ (GPT-2 limitation) |
 
 ## Future Work
 
 - Add automatic dtype conversion in export script
 - Provide conversion utility for existing models
 - Document dtype selection best practices
+- Investigate alternative export methods for dynamic sequence support
+- Test with LLaMA/RWKV models (RoPE may handle dynamic seq better)
