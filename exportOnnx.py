@@ -79,7 +79,7 @@ class ONNXExporter:
 		# Initialize checkpoint manager
 		self.checkpoint_mgr = CheckpointManager(
 			checkpoint_dir=str(self.training_dir),
-			save_mode=self.config.training.checkpoint.save_mode,
+			save_mode=self.config.training.save_mode,
 			monitor_field=self.config.training.monitor.field,
 			monitor_mode=self.config.training.monitor.mode,
 		)
@@ -109,7 +109,7 @@ class ONNXExporter:
 			logger.info("Using best checkpoint")
 		else:
 			# Specific checkpoint filename
-			checkpoint_path = str(self.training_dir / checkpoint_name)
+			checkpoint_path = str(self.training_dir / "checkpoints" / checkpoint_name)
 			if not Path(checkpoint_path).exists():
 				raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
@@ -186,7 +186,11 @@ class ONNXExporter:
 				self.model = model
 
 			def forward(self, input_ids):
-				outputs = self.model(input_ids)
+				# Unwrap AttentionCausalLoss to get base model if needed
+				if hasattr(self.model, "model"):
+					outputs = self.model.model(input_ids)
+				else:
+					outputs = self.model(input_ids)
 				# Handle both direct tensor output and dict/named tuple output
 				if isinstance(outputs, torch.Tensor):
 					return outputs
@@ -205,7 +209,7 @@ class ONNXExporter:
 		# Create dummy input
 		dummy_input = torch.randint(
 			0,
-			self.config.model.config.model_config.vocab_size,
+			self.config.model.config.model_config.config.vocab_size,
 			(batch_size, seq_len),
 			dtype=torch.long
 		)
