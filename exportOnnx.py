@@ -2,7 +2,8 @@
 ONNX Export Script for TrigoRL Models.
 
 This script exports trained models to ONNX format for cross-platform deployment.
-It loads a model from a training checkpoint and exports it to ONNX.
+It loads a model from a training checkpoint and exports it to ONNX, with optional
+quantization support for reduced model size.
 
 Usage:
     python exportOnnx.py <training_dir> [options]
@@ -14,14 +15,22 @@ Examples:
     # Export best checkpoint
     python exportOnnx.py training_output/trigo-gpt2-20250115_120000 --checkpoint best
 
+    # Export and quantize to INT8 with dynamic quantization
+    python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \\
+        --quantize --quant-type int8
+
+    # Export and quantize to INT4 with static quantization
+    python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \\
+        --quantize --quant-method static --quant-type int4 --calibration-samples 200
+
     # Export specific checkpoint with custom output name
     python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \\
         --checkpoint ep0050_loss_0.1234.chkpt \\
         --output my_model.onnx
 
-    # Export with dynamic batch size
+    # Export with dynamic batch size and quantization
     python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \\
-        --dynamic-batch
+        --dynamic-batch --quantize
 
     # Export with specific sequence length
     python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \\
@@ -39,6 +48,8 @@ from typing import Dict, Optional, Tuple
 import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
+from onnxruntime.quantization import quantize_dynamic, quantize_static, QuantType, CalibrationDataReader
+import onnx
 
 from trigor.models import make_model
 from trigor.utils.checkpoint import CheckpointManager
@@ -156,6 +167,127 @@ class ONNXExporter:
 		return model, checkpoint
 
 
+	def quantize_model(
+		self,
+		input_path: str,
+		output_path: Optional[str] = None,
+		quant_method: str = 'dynamic',
+		quant_type: str = 'int8',
+		calibration_samples: int = 100,
+	) -> str:
+		"""
+		Quantize ONNX model.
+
+		Args:
+		    input_path: Path to input ONNX model
+		    output_path: Path to save quantized model (auto-generated if None)
+		    quant_method: Quantization method ('dynamic' or 'static')
+		    quant_type: Quantization type ('int8' or 'int4')
+		    calibration_samples: Number of calibration samples for static quantization
+
+		Returns:
+		    Path to quantized model
+		"""
+		logger.info("\n" + "=" * 80)
+		logger.info("Quantizing Model")
+		logger.info("=" * 80)
+
+		input_path = Path(input_path)
+		if not input_path.exists():
+			raise FileNotFoundError(f"Input model not found: {input_path}")
+
+		# Generate output path if not specified
+		if output_path is None:
+			suffix = f"_{quant_type}"
+			output_path = input_path.parent / f"{input_path.stem}{suffix}.onnx"
+		else:
+			output_path = Path(output_path)
+
+		logger.info(f"Input model: {input_path}")
+		logger.info(f"Output model: {output_path}")
+		logger.info(f"Method: {quant_method}")
+		logger.info(f"Type: {quant_type}")
+
+		# Get input model size
+		input_size_mb = input_path.stat().st_size / (1024 * 1024)
+		logger.info(f"Input size: {input_size_mb:.2f} MB")
+
+		# Map quantization type
+		quant_type_map = {
+			'int8': QuantType.QInt8,
+			'uint8': QuantType.QUInt8,
+			'int4': QuantType.QInt4,
+			'uint4': QuantType.QUInt4,
+		}
+		if quant_type not in quant_type_map:
+			raise ValueError(f"Unsupported quantization type: {quant_type}")
+
+		weight_type = quant_type_map[quant_type]
+
+		try:
+			if quant_method == 'dynamic':
+				# Dynamic quantization (weights only)
+				logger.info("Running dynamic quantization...")
+				quantize_dynamic(
+					model_input=str(input_path),
+					model_output=str(output_path),
+					weight_type=weight_type,
+				)
+
+			elif quant_method == 'static':
+				# Static quantization (weights + activations)
+				logger.info("Running static quantization...")
+				logger.info(f"Calibration samples: {calibration_samples}")
+
+				# Create calibration data reader
+				class DummyCalibrationDataReader(CalibrationDataReader):
+					def __init__(self, vocab_size: int, seq_len: int, num_samples: int):
+						self.vocab_size = vocab_size
+						self.seq_len = seq_len
+						self.num_samples = num_samples
+						self.sample_counter = 0
+
+					def get_next(self):
+						if self.sample_counter >= self.num_samples:
+							return None
+						self.sample_counter += 1
+						# Generate random input
+						input_ids = torch.randint(0, self.vocab_size, (1, self.seq_len), dtype=torch.int64)
+						return {'input_ids': input_ids.numpy()}
+
+				vocab_size = self.config.model.config.model_config.config.vocab_size
+				calibration_reader = DummyCalibrationDataReader(
+					vocab_size=vocab_size,
+					seq_len=256,
+					num_samples=calibration_samples
+				)
+
+				quantize_static(
+					model_input=str(input_path),
+					model_output=str(output_path),
+					calibration_data_reader=calibration_reader,
+					weight_type=weight_type,
+				)
+
+			else:
+				raise ValueError(f"Unsupported quantization method: {quant_method}")
+
+			# Get output model size
+			output_size_mb = output_path.stat().st_size / (1024 * 1024)
+			compression_ratio = input_size_mb / output_size_mb if output_size_mb > 0 else 0
+
+			logger.info("✓ Quantization complete!")
+			logger.info(f"  Output size: {output_size_mb:.2f} MB")
+			logger.info(f"  Compression: {compression_ratio:.2f}x")
+			logger.info(f"  Saved: {input_size_mb - output_size_mb:.2f} MB")
+
+			return str(output_path)
+
+		except Exception as e:
+			logger.error(f"✗ Quantization failed: {e}")
+			raise
+
+
 	def export_to_onnx(
 		self,
 		model: nn.Module,
@@ -178,7 +310,7 @@ class ONNXExporter:
 		    dynamic_seq: Enable dynamic sequence length axis
 		    opset_version: ONNX opset version (default: 14)
 		"""
-		logger.info("=" * 80)
+		logger.info("\n" + "=" * 80)
 		logger.info("Exporting to ONNX")
 		logger.info("=" * 80)
 
@@ -284,7 +416,11 @@ class ONNXExporter:
 		dynamic_batch: bool = False,
 		dynamic_seq: bool = False,
 		opset_version: int = 14,
-	) -> str:
+		quantize: bool = False,
+		quant_method: str = 'dynamic',
+		quant_type: str = 'int8',
+		calibration_samples: int = 100,
+	) -> Tuple[str, Optional[str]]:
 		"""
 		Run complete export pipeline.
 
@@ -296,9 +432,13 @@ class ONNXExporter:
 		    dynamic_batch: Enable dynamic batch size
 		    dynamic_seq: Enable dynamic sequence length
 		    opset_version: ONNX opset version
+		    quantize: Whether to quantize the model after export
+		    quant_method: Quantization method ('dynamic' or 'static')
+		    quant_type: Quantization type ('int8' or 'int4')
+		    calibration_samples: Number of calibration samples for static quantization
 
 		Returns:
-		    Path to exported ONNX model
+		    Tuple of (onnx_path, quantized_path) where quantized_path is None if not quantized
 		"""
 		logger.info("=" * 80)
 		logger.info("TrigoRL ONNX Export")
@@ -327,12 +467,26 @@ class ONNXExporter:
 			opset_version=opset_version,
 		)
 
-		logger.info("=" * 80)
+		quantized_path = None
+
+		# Quantize if requested
+		if quantize:
+			quantized_path = self.quantize_model(
+				input_path=output_path,
+				quant_method=quant_method,
+				quant_type=quant_type,
+				calibration_samples=calibration_samples,
+			)
+
+		logger.info("\n" + "=" * 80)
 		logger.info("Export complete!")
-		logger.info(f"Saved to: {output_path}")
+		logger.info("=" * 80)
+		logger.info(f"ONNX model: {output_path}")
+		if quantized_path:
+			logger.info(f"Quantized model: {quantized_path}")
 		logger.info("=" * 80)
 
-		return output_path
+		return output_path, quantized_path
 
 
 def parse_args():
@@ -396,6 +550,35 @@ def parse_args():
 		help='ONNX opset version (default: 14)'
 	)
 
+	parser.add_argument(
+		'--quantize',
+		action='store_true',
+		help='Quantize the model after export'
+	)
+
+	parser.add_argument(
+		'--quant-method',
+		type=str,
+		default='dynamic',
+		choices=['dynamic', 'static'],
+		help='Quantization method: dynamic (weights only) or static (weights + activations) (default: dynamic)'
+	)
+
+	parser.add_argument(
+		'--quant-type',
+		type=str,
+		default='int8',
+		choices=['int8', 'uint8', 'int4', 'uint4'],
+		help='Quantization type (default: int8)'
+	)
+
+	parser.add_argument(
+		'--calibration-samples',
+		type=int,
+		default=100,
+		help='Number of calibration samples for static quantization (default: 100)'
+	)
+
 	return parser.parse_args()
 
 
@@ -407,8 +590,8 @@ def main():
 		# Create exporter
 		exporter = ONNXExporter(args.training_dir)
 
-		# Run export
-		output_path = exporter.run(
+		# Run export (and optionally quantization)
+		onnx_path, quantized_path = exporter.run(
 			checkpoint_name=args.checkpoint,
 			output_path=args.output,
 			batch_size=args.batch_size,
@@ -416,6 +599,10 @@ def main():
 			dynamic_batch=args.dynamic_batch,
 			dynamic_seq=args.dynamic_seq,
 			opset_version=args.opset_version,
+			quantize=args.quantize,
+			quant_method=args.quant_method,
+			quant_type=args.quant_type,
+			calibration_samples=args.calibration_samples,
 		)
 
 		return 0

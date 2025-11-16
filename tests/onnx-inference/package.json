@@ -1,0 +1,25 @@
+{
+  "name": "trigorl-onnx-inference-test",
+  "version": "1.0.0",
+  "description": "Node.js inference test for TrigoRL ONNX models",
+  "main": "test_inference.js",
+  "scripts": {
+    "test": "node test_inference.js",
+    "test:verbose": "NODE_DEBUG=onnxruntime node test_inference.js"
+  },
+  "keywords": [
+    "onnx",
+    "inference",
+    "gpt2",
+    "trigo",
+    "onnxruntime"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "onnxruntime-node": "^1.20.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

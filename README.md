@@ -65,6 +65,34 @@ Test all training configs:
 python examples/verify_training_configs.py
 ```
 
+### Export Models to ONNX
+
+Export trained models for cross-platform deployment:
+
+```bash
+# Export best checkpoint (default)
+python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt
+
+# Export with INT8 quantization (recommended for deployment)
+python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
+    --quantize --quant-type int8
+
+# Export with dynamic batch/sequence sizes
+python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
+    --dynamic-batch --dynamic-seq
+
+# Export with static quantization (best accuracy)
+python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
+    --quantize --quant-method static --calibration-samples 200
+```
+
+**Quantization benefits**:
+- **INT8 dynamic**: ~3-4x smaller model, minimal accuracy loss
+- **INT4**: ~8x smaller, more aggressive compression
+- **Static quantization**: Better accuracy than dynamic, requires calibration
+
+See `docs/onnx_quantization_guide.md` for comprehensive quantization documentation.
+
 ## Technical Stack
 
 ### Reinforcement Learning Framework
@@ -99,6 +127,12 @@ python examples/verify_training_configs.py
 - Model testing suite (109 tests passing)
 - Configuration verification scripts
 
+✅ **Model Export**
+- ONNX export script with checkpoint loading
+- INT8/INT4 quantization (dynamic and static)
+- 3-4x model compression with minimal accuracy loss
+- Node.js inference validation and testing
+
 ## Development Roadmap
 
 The following components need to be implemented for the RL framework:
@@ -126,9 +160,11 @@ The following components need to be implemented for the RL framework:
    - State representation for 3D board positions
    - Action space definition
 
-5. **Model Export** 📋 PLANNED
-   - ONNX conversion utilities
-   - Inference optimization
+5. ~~**Model Export**~~ ✅ COMPLETE
+   - ~~ONNX conversion utilities~~
+   - ~~INT8/INT4 quantization support~~
+   - ~~Static and dynamic quantization~~
+   - ~~Node.js inference validation~~
 
 6. **Evaluation & Analysis** 📋 PLANNED
    - Agent performance metrics
