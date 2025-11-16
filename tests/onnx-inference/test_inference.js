@@ -228,26 +228,42 @@ async function testInference(session, batchSize, seqLen) {
 async function testGeneration(session, numTokens) {
 	console.log(`\nGenerating ${numTokens} tokens autoregressively...`);
 
-	// Start with random initial token
-	const sequence = [Math.floor(Math.random() * CONFIG.vocabSize)];
-	console.log(`  Initial token: ${sequence[0]}`);
+	// TGN tokenizer: byte-level (0-255) + PAD(256) + START(257) + END(258)
+	const PAD_TOKEN = 256;
+	const PROMPT = "[Board 5x5]";
 
+	// Convert prompt to token IDs (byte values)
+	const promptTokens = Array.from(PROMPT).map(c => c.charCodeAt(0));
+	console.log(`  Prompt: "${PROMPT}"`);
+	console.log(`  Prompt tokens (${promptTokens.length}): [${promptTokens.join(', ')}]`);
+
+	// Start with prompt tokens
+	const sequence = [...promptTokens];
 	const times = [];
 
 	// Generate tokens
-	for (let i = 0; i < numTokens - 1; i++) {
-		const inputIds = new BigInt64Array(sequence.map(t => BigInt(t)));
-		const inputTensor = new ort.Tensor('int64', inputIds, [1, sequence.length]);
+	for (let i = 0; i < numTokens; i++) {
+		// Pad sequence to fixed length 256
+		const paddedLength = 256;
+		const paddedSequence = [...sequence];
+		while (paddedSequence.length < paddedLength) {
+			paddedSequence.push(PAD_TOKEN);
+		}
+
+		// Create input tensor
+		const inputIds = new BigInt64Array(paddedSequence.map(t => BigInt(t)));
+		const inputTensor = new ort.Tensor('int64', inputIds, [1, paddedLength]);
 
 		const startTime = Date.now();
 		const results = await session.run({ input_ids: inputTensor });
 		times.push(Date.now() - startTime);
 
-		// Get last token prediction
+		// Get prediction at the last non-padded position
 		const logits = results.logits.data;
-		const lastPos = sequence.length - 1;
+		const lastPos = sequence.length - 1;  // Position before padding
 		const offset = lastPos * CONFIG.vocabSize;
 
+		// Find token with highest logit
 		let maxIdx = 0;
 		let maxVal = logits[offset];
 		for (let j = 1; j < CONFIG.vocabSize; j++) {
@@ -260,11 +276,13 @@ async function testGeneration(session, numTokens) {
 		sequence.push(maxIdx);
 	}
 
-	console.log(`  Generated: [${sequence.join(', ')}]`);
-	console.log(`  Length: ${sequence.length}`);
+	// Convert generated tokens to string (only valid tokens, exclude padding)
+	const generatedText = String.fromCharCode(...sequence);
+	console.log(`  Generated text: "${generatedText}"`);
+	console.log(`  Token sequence (${sequence.length}): [${sequence.join(', ')}]`);
 
 	const avgTime = times.reduce((a, b) => a + b, 0) / times.length;
-	console.log(`  Avg time: ${avgTime.toFixed(2)}ms`);
+	console.log(`  Avg inference time: ${avgTime.toFixed(2)}ms`);
 	console.log(`  Tokens/sec: ${(1000 / avgTime).toFixed(2)}`);
 	console.log('  ✓ Generation test passed');
 }
