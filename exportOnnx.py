@@ -38,8 +38,6 @@ Examples:
 """
 
 import argparse
-import glob
-import re
 import logging
 import sys
 from pathlib import Path
@@ -49,7 +47,6 @@ import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
 from onnxruntime.quantization import quantize_dynamic, quantize_static, QuantType, CalibrationDataReader
-import onnx
 
 from trigor.models import make_model
 from trigor.utils.checkpoint import CheckpointManager
@@ -407,6 +404,146 @@ class ONNXExporter:
 			raise
 
 
+	def export_prediction_mode(
+		self,
+		model: nn.Module,
+		output_path: str,
+		batch_size: int = 1,
+		prefix_len: int = 128,
+		eval_len: int = 64,
+		dynamic_batch: bool = True,
+		dynamic_n: bool = True,
+		dynamic_m: bool = True,
+		opset_version: int = 14,
+	) -> None:
+		"""
+		Export model in prediction mode with custom attention masking.
+
+		Args:
+		    model: PyTorch model to export (will be wrapped in PredictionCausalLM)
+		    output_path: Path to save ONNX model
+		    batch_size: Batch size for dummy input (default: 1)
+		    prefix_len: Length of prefix (n) for dummy example (default: 128)
+		    eval_len: Length of evaluated sequence (m) for dummy example (default: 64)
+		    dynamic_batch: Enable dynamic batch size axis (default: True)
+		    dynamic_n: Enable dynamic prefix length axis (default: True)
+		    dynamic_m: Enable dynamic evaluated length axis (default: True)
+		    opset_version: ONNX opset version (default: 14)
+		"""
+		logger.info("\n" + "=" * 80)
+		logger.info("Exporting to ONNX (Evaluation Mode)")
+		logger.info("=" * 80)
+
+		# Import EvaluationCausalLM
+		from trigor.models import EvaluationCausalLM, create_causal_evaluated_mask
+
+		# Wrap model in EvaluationCausalLM
+		evaluation_model = EvaluationCausalLM(model)
+		evaluation_model.eval()
+
+		# Create dummy inputs
+		vocab_size = self.config.model.config.model_config.config.vocab_size
+
+		dummy_prefix_ids = torch.randint(
+			0, vocab_size, (batch_size, prefix_len), dtype=torch.long
+		)
+
+		dummy_evaluated_ids = torch.randint(
+			0, vocab_size, (batch_size, eval_len), dtype=torch.long
+		)
+
+		# Create dummy evaluated_mask (causal by default)
+		dummy_evaluated_mask = create_causal_evaluated_mask(
+			eval_len, device=dummy_prefix_ids.device
+		).expand(batch_size, eval_len, eval_len)
+
+		logger.info(f"Dummy input shapes:")
+		logger.info(f"  prefix_ids: {dummy_prefix_ids.shape}")
+		logger.info(f"  evaluated_ids: {dummy_evaluated_ids.shape}")
+		logger.info(f"  evaluated_mask: {dummy_evaluated_mask.shape}")
+		logger.info(f"  n (prefix length): {prefix_len}, m (evaluated length): {eval_len}")
+
+		# Define input/output names
+		input_names = ['prefix_ids', 'evaluated_ids', 'evaluated_mask']
+		output_names = ['logits']
+
+		# Define dynamic axes
+		dynamic_axes = {}
+		if dynamic_batch or dynamic_n or dynamic_m:
+			# prefix_ids axes
+			axes_prefix = {}
+			if dynamic_batch:
+				axes_prefix[0] = 'batch_size'
+			if dynamic_n:
+				axes_prefix[1] = 'n'
+
+			# evaluated_ids axes
+			axes_eval = {}
+			if dynamic_batch:
+				axes_eval[0] = 'batch_size'
+			if dynamic_m:
+				axes_eval[1] = 'm'
+
+			# evaluated_mask axes
+			axes_mask = {}
+			if dynamic_batch:
+				axes_mask[0] = 'batch_size'
+			if dynamic_m:
+				axes_mask[1] = 'm'
+				axes_mask[2] = 'm'
+
+			dynamic_axes['prefix_ids'] = axes_prefix
+			dynamic_axes['evaluated_ids'] = axes_eval
+			dynamic_axes['evaluated_mask'] = axes_mask
+
+			# Output axes (m+1 is dynamic based on m)
+			output_axes = {}
+			if dynamic_batch:
+				output_axes[0] = 'batch_size'
+			if dynamic_m:
+				output_axes[1] = 'm_plus_1'  # m+1 positions
+			output_axes[2] = 'vocab_size'
+			dynamic_axes['logits'] = output_axes
+
+			logger.info(f"Dynamic axes: {dynamic_axes}")
+
+		# Export to ONNX
+		logger.info(f"Exporting to: {output_path}")
+
+		try:
+			import warnings
+			with warnings.catch_warnings():
+				warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+				warnings.filterwarnings("ignore", category=UserWarning)
+
+				torch.onnx.export(
+					evaluation_model,
+					(dummy_prefix_ids, dummy_evaluated_ids, dummy_evaluated_mask),
+					output_path,
+					input_names=input_names,
+					output_names=output_names,
+					dynamic_axes=dynamic_axes if dynamic_axes else None,
+					opset_version=opset_version,
+					do_constant_folding=True,
+					export_params=True,
+					dynamo=False,
+				)
+
+			logger.info("✓ ONNX export successful!")
+
+			# Get file size
+			file_size_mb = Path(output_path).stat().st_size / (1024 * 1024)
+			logger.info(f"  File size: {file_size_mb:.2f} MB")
+			logger.info(f"  Opset version: {opset_version}")
+			logger.info(f"  Inputs: {', '.join(input_names)}")
+			logger.info(f"  Output: {output_names[0]} - shape [batch, m+1, vocab_size]")
+			logger.info(f"  Mode: Evaluation (n={prefix_len}, m={eval_len} example)")
+
+		except Exception as e:
+			logger.error(f"✗ ONNX export failed: {e}")
+			raise
+
+
 	def run(
 		self,
 		checkpoint_name: Optional[str] = None,
@@ -420,6 +557,8 @@ class ONNXExporter:
 		quant_method: str = 'dynamic',
 		quant_type: str = 'int8',
 		calibration_samples: int = 100,
+		prediction_mode: bool = False,
+		prefix_len: int = 128,
 	) -> Tuple[str, Optional[str]]:
 		"""
 		Run complete export pipeline.
@@ -436,6 +575,8 @@ class ONNXExporter:
 		    quant_method: Quantization method ('dynamic' or 'static')
 		    quant_type: Quantization type ('int8' or 'int4')
 		    calibration_samples: Number of calibration samples for static quantization
+		    prediction_mode: Export in prediction mode with custom attention masking
+		    prefix_len: Length of prefix for prediction mode
 
 		Returns:
 		    Tuple of (onnx_path, quantized_path) where quantized_path is None if not quantized
@@ -444,6 +585,8 @@ class ONNXExporter:
 		logger.info("TrigoRL ONNX Export")
 		logger.info("=" * 80)
 		logger.info(f"Training directory: {self.training_dir}")
+		if prediction_mode:
+			logger.info(f"Mode: Evaluation (custom attention masking)")
 
 		# Load model
 		model, checkpoint = self.load_model(checkpoint_name)
@@ -452,20 +595,35 @@ class ONNXExporter:
 		if output_path is None:
 			model_name = self.config.model.config.model_config.type
 			epoch = checkpoint['epoch']
-			output_path = str(self.training_dir / f"{model_name}_ep{epoch:04d}.onnx")
+			suffix = '_prediction' if prediction_mode else ''
+			output_path = str(self.training_dir / f"{model_name}_ep{epoch:04d}{suffix}.onnx")
 
 		output_path = str(Path(output_path).resolve())
 
-		# Export to ONNX
-		self.export_to_onnx(
-			model=model,
-			output_path=output_path,
-			batch_size=batch_size,
-			seq_len=seq_len,
-			dynamic_batch=dynamic_batch,
-			dynamic_seq=dynamic_seq,
-			opset_version=opset_version,
-		)
+		# Export to ONNX (choose mode)
+		if prediction_mode:
+			eval_len = seq_len - prefix_len  # Calculate eval_len from seq_len and prefix_len
+			self.export_prediction_mode(
+				model=model,
+				output_path=output_path,
+				batch_size=batch_size,
+				prefix_len=prefix_len,
+				eval_len=eval_len,
+				dynamic_batch=dynamic_batch,
+				dynamic_n=dynamic_seq,
+				dynamic_m=dynamic_seq,
+				opset_version=opset_version,
+			)
+		else:
+			self.export_to_onnx(
+				model=model,
+				output_path=output_path,
+				batch_size=batch_size,
+				seq_len=seq_len,
+				dynamic_batch=dynamic_batch,
+				dynamic_seq=dynamic_seq,
+				opset_version=opset_version,
+			)
 
 		quantized_path = None
 
@@ -579,6 +737,19 @@ def parse_args():
 		help='Number of calibration samples for static quantization (default: 100)'
 	)
 
+	parser.add_argument(
+		'--prediction-mode',
+		action='store_true',
+		help='Export in evaluation mode with custom attention masking for probability computation'
+	)
+
+	parser.add_argument(
+		'--prefix-len',
+		type=int,
+		default=128,
+		help='Length of prefix for prediction mode dummy example (default: 128)'
+	)
+
 	return parser.parse_args()
 
 
@@ -603,6 +774,8 @@ def main():
 			quant_method=args.quant_method,
 			quant_type=args.quant_type,
 			calibration_samples=args.calibration_samples,
+			prediction_mode=args.prediction_mode,
+			prefix_len=args.prefix_len,
 		)
 
 		return 0
