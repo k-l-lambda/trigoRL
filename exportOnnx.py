@@ -404,7 +404,7 @@ class ONNXExporter:
 			raise
 
 
-	def export_prediction_mode(
+	def export_evaluation_mode(
 		self,
 		model: nn.Module,
 		output_path: str,
@@ -417,10 +417,10 @@ class ONNXExporter:
 		opset_version: int = 14,
 	) -> None:
 		"""
-		Export model in prediction mode with custom attention masking.
+		Export model in evaluation mode with custom attention masking.
 
 		Args:
-		    model: PyTorch model to export (will be wrapped in PredictionCausalLM)
+		    model: PyTorch model to export (will be wrapped in EvaluationCausalLM)
 		    output_path: Path to save ONNX model
 		    batch_size: Batch size for dummy input (default: 1)
 		    prefix_len: Length of prefix (n) for dummy example (default: 128)
@@ -557,7 +557,7 @@ class ONNXExporter:
 		quant_method: str = 'dynamic',
 		quant_type: str = 'int8',
 		calibration_samples: int = 100,
-		prediction_mode: bool = False,
+		evaluation_mode: bool = False,
 		prefix_len: int = 128,
 	) -> Tuple[str, Optional[str]]:
 		"""
@@ -575,8 +575,8 @@ class ONNXExporter:
 		    quant_method: Quantization method ('dynamic' or 'static')
 		    quant_type: Quantization type ('int8' or 'int4')
 		    calibration_samples: Number of calibration samples for static quantization
-		    prediction_mode: Export in prediction mode with custom attention masking
-		    prefix_len: Length of prefix for prediction mode
+		    evaluation_mode: Export in evaluation mode with custom attention masking
+		    prefix_len: Length of prefix for evaluation mode
 
 		Returns:
 		    Tuple of (onnx_path, quantized_path) where quantized_path is None if not quantized
@@ -585,7 +585,7 @@ class ONNXExporter:
 		logger.info("TrigoRL ONNX Export")
 		logger.info("=" * 80)
 		logger.info(f"Training directory: {self.training_dir}")
-		if prediction_mode:
+		if evaluation_mode:
 			logger.info(f"Mode: Evaluation (custom attention masking)")
 
 		# Load model
@@ -595,15 +595,15 @@ class ONNXExporter:
 		if output_path is None:
 			model_name = self.config.model.config.model_config.type
 			epoch = checkpoint['epoch']
-			suffix = '_prediction' if prediction_mode else ''
+			suffix = '_evaluation' if evaluation_mode else ''
 			output_path = str(self.training_dir / f"{model_name}_ep{epoch:04d}{suffix}.onnx")
 
 		output_path = str(Path(output_path).resolve())
 
 		# Export to ONNX (choose mode)
-		if prediction_mode:
+		if evaluation_mode:
 			eval_len = seq_len - prefix_len  # Calculate eval_len from seq_len and prefix_len
-			self.export_prediction_mode(
+			self.export_evaluation_mode(
 				model=model,
 				output_path=output_path,
 				batch_size=batch_size,
@@ -738,7 +738,7 @@ def parse_args():
 	)
 
 	parser.add_argument(
-		'--prediction-mode',
+		'--evaluation-mode',
 		action='store_true',
 		help='Export in evaluation mode with custom attention masking for probability computation'
 	)
@@ -747,7 +747,7 @@ def parse_args():
 		'--prefix-len',
 		type=int,
 		default=128,
-		help='Length of prefix for prediction mode dummy example (default: 128)'
+		help='Length of prefix for evaluation mode dummy example (default: 128)'
 	)
 
 	return parser.parse_args()
@@ -774,7 +774,7 @@ def main():
 			quant_method=args.quant_method,
 			quant_type=args.quant_type,
 			calibration_samples=args.calibration_samples,
-			prediction_mode=args.prediction_mode,
+			evaluation_mode=args.evaluation_mode,
 			prefix_len=args.prefix_len,
 		)
 

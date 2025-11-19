@@ -1,9 +1,9 @@
 /**
- * Node.js Test Suite for Prediction Mode ONNX Models
+ * Node.js Test Suite for Evaluation Mode ONNX Models
  *
- * Tests inference with PredictionCausalLM exported models that accept:
+ * Tests inference with EvaluationCausalLM exported models that accept:
  * - input_ids: [batch, seq_len]
- * - prediction_mask: [batch, seq_len, seq_len]
+ * - evaluated_mask: [batch, seq_len, seq_len]
  * - evaluated_ids: [batch, seq_len]
  *
  * Returns:
@@ -130,7 +130,7 @@ function createEvaluatedIds(batchSize, seqLen, prefixLen, evaluatedPositions = n
  */
 async function testBasicInference(session) {
 	console.log('\n' + '='.repeat(80));
-	console.log('TEST 1: Basic Inference (Prediction Mode)');
+	console.log('TEST 1: Basic Inference (Evaluation Mode)');
 	console.log('='.repeat(80));
 
 	const batchSize = 1;
@@ -153,7 +153,7 @@ async function testBasicInference(session) {
 	const startTime = Date.now();
 	const results = await session.run({
 		input_ids: inputIdsTensor,
-		prediction_mask: predictionMaskTensor,
+		evaluated_mask: predictionMaskTensor,
 		evaluated_ids: evaluatedIdsTensor
 	});
 	const inferenceTime = Date.now() - startTime;
@@ -165,7 +165,7 @@ async function testBasicInference(session) {
 
 	console.log(`  Input shapes:`);
 	console.log(`    input_ids: [${inputIdsTensor.dims.join(', ')}]`);
-	console.log(`    prediction_mask: [${predictionMaskTensor.dims.join(', ')}]`);
+	console.log(`    evaluated_mask: [${predictionMaskTensor.dims.join(', ')}]`);
 	console.log(`    evaluated_ids: [${evaluatedIdsTensor.dims.join(', ')}]`);
 	console.log(`  Output shape: [${logits.dims.join(', ')}]`);
 	console.log(`  Expected shape: [${expectedShape.join(', ')}]`);
@@ -230,7 +230,7 @@ async function testVariableEvaluated(session) {
 	const startTime = Date.now();
 	const results = await session.run({
 		input_ids: inputIdsTensor,
-		prediction_mask: predictionMaskTensor,
+		evaluated_mask: predictionMaskTensor,
 		evaluated_ids: evaluatedIdsTensor
 	});
 	const inferenceTime = Date.now() - startTime;
@@ -288,7 +288,7 @@ async function testDiagonalMask(session) {
 	const startTime = Date.now();
 	const results = await session.run({
 		input_ids: inputIdsTensor,
-		prediction_mask: predictionMaskTensor,
+		evaluated_mask: predictionMaskTensor,
 		evaluated_ids: evaluatedIdsTensor
 	});
 	const inferenceTime = Date.now() - startTime;
@@ -497,7 +497,7 @@ async function testTreeAttention(session) {
  */
 async function runTests() {
 	console.log('\n' + '='.repeat(80));
-	console.log('ONNX Prediction Mode Inference Test Suite (Node.js)');
+	console.log('ONNX Evaluation Mode Inference Test Suite (Node.js)');
 	console.log('='.repeat(80));
 
 	// Check if model file exists

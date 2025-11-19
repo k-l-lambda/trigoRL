@@ -51,12 +51,12 @@ class EvaluationCausalLM(nn.Module):
 		evaluated_mask: torch.Tensor,
 	) -> torch.Tensor:
 		"""
-		Forward pass with prediction mode masking.
+		Forward pass with evaluation mode masking.
 
 		Args:
 		    prefix_ids: Prefix token IDs [batch_size, n]
-		    evaluated_ids: Prediction token IDs to evaluate [batch_size, m]
-		    evaluated_mask: Custom attention mask for prediction region [batch_size, m, m]
+		    evaluated_ids: Evaluated token IDs [batch_size, m]
+		    evaluated_mask: Custom attention mask for evaluated region [batch_size, m, m]
 		                    This mask overwrites the bottom-right m×m region of the causal mask
 
 		Returns:
@@ -78,7 +78,7 @@ class EvaluationCausalLM(nn.Module):
 		combined_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1).clone()  # Clone for in-place modification
 
 		# Overwrite the bottom-right m×m region with evaluated_mask
-		# This replaces the default causal pattern in the prediction region
+		# This replaces the default causal pattern in the evaluated region
 		combined_mask[:, n:, n:] = evaluated_mask  # [batch, m, m] overwrites tail
 
 		# Convert to 4D attention mask: [batch_size, 1, seq_len, seq_len]
