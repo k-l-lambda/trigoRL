@@ -16,13 +16,13 @@ const fs = require('fs');
 
 // Configuration
 const CONFIG = {
-	// Update this path after exporting a prediction mode model
-	modelPath: path.resolve(__dirname, '../../outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt/GPT2CausalLM_ep0015_tree.onnx'),
+	// Dynamic evaluation mode model
+	modelPath: path.resolve(__dirname, '../../outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt/GPT2CausalLM_ep0015_evaluation.onnx'),
 	vocabSize: 259,
-	// NOTE: These must match the exported model's fixed dimensions
-	// Model was exported with: --prefix-len 10 --seq-len 15 (so eval_len=5)
-	fixedPrefixLen: 10,
-	fixedEvalLen: 5,
+	// Model supports dynamic dimensions (any prefix_len and eval_len)
+	// Using these values for testing:
+	testPrefixLen: 10,
+	testEvalLen: 5,
 	tests: {
 		basicInference: false,  // Disabled, dimensions don't match
 		variableEvaluated: false,  // Disabled
@@ -323,8 +323,8 @@ async function testTreeAttention(session) {
 	console.log('='.repeat(80));
 
 	const batchSize = 1;
-	const prefixLen = 10;  // Small prefix for context
-	const m = 5;  // 5 evaluated tokens: [a, b, c, d, e]
+	const prefixLen = CONFIG.testPrefixLen;  // Use config value
+	const m = CONFIG.testEvalLen;  // Use config value: 5 evaluated tokens [a, b, c, d, e]
 
 	console.log(`Testing tree attention with 2 causal branches:`);
 	console.log(`  Branch 1: a → b → c`);

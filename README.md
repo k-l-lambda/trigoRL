@@ -70,8 +70,16 @@ python examples/verify_training_configs.py
 Export trained models for cross-platform deployment:
 
 ```bash
-# Export best checkpoint (default)
+# Export best checkpoint (default - standard inference mode)
 python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt
+
+# Export in evaluation mode with fixed dimensions
+python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
+    --evaluation-mode --prefix-len 10 --seq-len 15
+
+# Export evaluation mode with dynamic dimensions (prefix-len/seq-len only for dummy input)
+python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
+    --evaluation-mode --dynamic-seq
 
 # Export with INT8 quantization (recommended for deployment)
 python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
@@ -85,6 +93,10 @@ python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
 python exportOnnx.py outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt \
     --quantize --quant-method static --calibration-samples 200
 ```
+
+**Export Modes**:
+- **Standard mode**: Single input `input_ids`, returns `logits` for all positions
+- **Evaluation mode**: Three inputs (`prefix_ids`, `evaluated_ids`, `evaluated_mask`), returns logits for last prefix + evaluated positions. Supports custom attention patterns like tree attention for computing sequence probabilities.
 
 **Quantization benefits**:
 - **INT8 dynamic**: ~3-4x smaller model, minimal accuracy loss
