@@ -6953,3 +6953,85 @@ Ready for dual-head network implementation that uses VALUE token positions for v
 </details>
 
 
+> Remove unused special token definitions (IDs 4-7) from the tokenizer, keeping only essential tokens.
+
+<details>
+<summary>Tokenizer cleanup: removed unused special tokens</summary>
+
+Cleaned up the tokenizer implementation by removing unused special token definitions:
+
+**Removed Tokens**:
+- `UNK_ID = 4` (Unknown token)
+- `MASK_ID = 5` (Mask token for MLM tasks)
+- `SEP_ID = 6` (Separator token)
+- `CLS_ID = 7` (Classification token)
+
+**Kept Essential Tokens** (0-3):
+- `PAD_ID = 0` - Padding token
+- `START_ID = 1` - Beginning of sequence
+- `END_ID = 2` - End of sequence
+- `VALUE_ID = 3` - Value evaluation marker for dual-head networks
+
+**Token IDs 4-7**: Reserved for future use
+
+**Implementation Changes**:
+
+1. **Encoding behavior**:
+   - Unknown bytes (non-ASCII) are now **skipped** instead of mapped to UNK token
+   - Appropriate for TGN notation which only uses ASCII characters
+   ```python
+   # Old: mapped unknown bytes to UNK_ID
+   if byte_val in self.byte_to_token:
+       tokens.append(self.byte_to_token[byte_val])
+   else:
+       tokens.append(self.UNK_ID)  # ❌
+
+   # New: skip unknown bytes
+   if byte_val in self.byte_to_token:
+       tokens.append(self.byte_to_token[byte_val])
+   # Skip out-of-vocabulary bytes  # ✓
+   ```
+
+2. **Updated `get_special_tokens()` method**:
+   ```python
+   # Returns only 4 tokens now
+   return {
+       'pad': self.PAD_ID,
+       'start': self.START_ID,
+       'end': self.END_ID,
+       'value': self.VALUE_ID,
+   }
+   ```
+
+3. **Test updates**:
+   - `test_special_tokens()`: Verifies only 4 tokens exist
+   - `test_unknown_bytes()`: Confirms unknown bytes are skipped (returns empty list)
+   - `test_tgn_common_characters()`: Verifies all TGN characters encode successfully
+
+4. **Documentation updates**:
+   - File header: "0-3: Special tokens (PAD, START, END, VALUE) - 4-7 reserved"
+   - Class docstring: "4-7: unused" (reserved for future extensions)
+
+**Testing**:
+All 21 tests pass ✓
+
+**Benefits**:
+1. **Cleaner codebase**: Only tokens actually used are defined
+2. **Clear intent**: Tokens 4-7 explicitly marked as reserved
+3. **Proper handling**: Unknown bytes skipped (appropriate for ASCII-only TGN)
+4. **Future-proof**: Reserved IDs available for future features (e.g., game state markers)
+
+**Final Token Layout**:
+```
+0-3:    Used special tokens (PAD, START, END, VALUE)
+4-7:    Reserved for future use
+8-10:   Whitespace (TAB, LF, SPACE)
+11-104: ASCII printable (! to ~)
+127:    DEL character
+```
+
+The tokenizer is now minimal, clean, and ready for dual-head network training.
+
+</details>
+
+
