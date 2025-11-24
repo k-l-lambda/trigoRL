@@ -40,14 +40,14 @@ model:
     model_config:
       type: RwkvCausalLM
       config:
-        vocab_size: 259  # TGN byte tokenizer vocab size
+        vocab_size: 128  # TGN compact tokenizer (reduced from 259)
         hidden_size: 256
         num_layers: 6
         max_seq_len: 8192
         intermediate_size: 1024  # Channel-mixing FFN dimension (4 * hidden_size)
         layer_norm_eps: 1e-5
         use_cache: true
-    ignore_index: 256  # PAD token ID to ignore in loss computation
+    ignore_index: 0  # PAD token ID (was 256 in old tokenizer)
     label_smoothing: 0.1  # Label smoothing factor for regularization
 
 # Training configuration

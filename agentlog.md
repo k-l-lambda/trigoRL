@@ -6834,3 +6834,122 @@ data:
 
 </details>
 
+
+> Redesign TGN tokenizer to reduce vocabulary size from 259 to 128 tokens, optimizing memory efficiency and training speed.
+
+<details>
+<summary>Tokenizer vocabulary reduction and VALUE token implementation</summary>
+
+Completely redesigned `trigor/data/tokenizer.py` to reduce vocabulary size from 259 to 128 tokens:
+
+**Vocabulary Layout Changes**:
+
+**Old Tokenizer (259 tokens)**:
+- 0-255: All byte values (00-FF)
+- 256: PAD
+- 257: START
+- 258: END
+- Total: 259 tokens
+
+**New Tokenizer (128 tokens)**:
+- 0-7: Special tokens (PAD, START, END, **VALUE**, UNK, MASK, SEP, CLS)
+- 8-10: Essential whitespace (TAB=9, LF=10, SPACE=32)
+- 11-104: ASCII printable (33-126: ! to ~)
+- 127: DEL character
+- Total: 128 tokens
+
+**Key Design Features**:
+
+1. **VALUE Token (ID=3)** - New special token for dual-head network training
+   - Inserted before or after sequences to mark value prediction points
+   - Enables trajectory training with multiple value labels per game
+   - Usage: `tokenizer.encode(text, add_value_token=True)`
+
+2. **Memory Efficiency**:
+   - Vocabulary reduction: 259 → 128 (50.6% reduction)
+   - Embedding layer size (256-dim): 0.25 MB → 0.12 MB (49.4% reduction)
+   - Smaller LM head: same reduction applies
+
+3. **TGN Compatibility**:
+   - TGN uses ASCII-based notation (A-Z, a-z, 0-9, space, punctuation)
+   - All TGN characters fit in tokens 10-104
+   - Multi-line game records supported (newline → token 9)
+
+**Implementation Details**:
+
+```python
+# Special tokens consolidated to 0-7
+PAD_ID = 0
+START_ID = 1
+END_ID = 2
+VALUE_ID = 3  # ← NEW: For value head in dual-head networks
+UNK_ID = 4
+MASK_ID = 5
+SEP_ID = 6
+CLS_ID = 7
+
+# Whitespace mapping (tokens 8-10)
+byte_to_token[9] = 8   # TAB
+byte_to_token[10] = 9  # LF (newline)
+byte_to_token[32] = 10 # SPACE
+
+# ASCII printable (33-126) → tokens 11-104
+for ascii_val in range(33, 127):
+    token_id = ascii_val - 33 + 11
+    byte_to_token[ascii_val] = token_id
+
+# DEL character → token 127
+byte_to_token[127] = 127
+```
+
+**New Encoding Options**:
+
+```python
+# Standard encoding: [START] ... [END]
+tokens = tokenizer.encode(text, add_value_token=False)
+
+# With VALUE token: [VALUE] [START] ... [END]
+tokens = tokenizer.encode(text, add_value_token=True)
+
+# Trajectory training: manual VALUE insertion after each move
+moves = ["B3 000", "W3 111", "B3 222"]
+trajectory = []
+for move in moves:
+    move_tokens = tokenizer.encode(move, add_special_tokens=False)
+    trajectory.extend(move_tokens.tolist())
+    trajectory.append(tokenizer.VALUE_ID)  # Insert VALUE after move
+```
+
+**Testing**:
+
+Created comprehensive test suite `tests/test_tokenizer_compact.py`:
+- 21 tests covering all functionality
+- 8 test classes: Basics, VALUE token, ASCII mapping, batch ops, memory efficiency, TGN compatibility
+- All tests pass (21/21 ✓)
+
+**Configuration Updates**:
+
+Updated all training configs to use new tokenizer:
+- `configs/training/trigo-gpt2.yaml`
+- `configs/training/trigo-llama.yaml`
+- `configs/training/trigo-rwkv.yaml`
+- `configs/training/trigo-gpt2-invsqrt.yaml`
+
+Changes:
+- `vocab_size: 259` → `vocab_size: 128`
+- `ignore_index: 256` → `ignore_index: 0` (PAD token ID changed)
+
+**Benefits**:
+
+1. **Memory**: 50% reduction in embedding/LM head size
+2. **Speed**: Fewer tokens = faster softmax in LM head
+3. **Future-ready**: VALUE token enables dual-head network training
+4. **Cleaner**: Special tokens organized in 0-7 range
+
+**Next Steps**:
+
+Ready for dual-head network implementation that uses VALUE token positions for value prediction in AlphaGo Zero-style training.
+
+</details>
+
+

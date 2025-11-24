@@ -36,7 +36,7 @@ model:
     model_config:
       type: GPT2CausalLM
       config:
-        vocab_size: 259
+        vocab_size: 128  # TGN compact tokenizer (reduced from 259)
         hidden_size: 256
         num_layers: 6
         num_heads: 8
@@ -46,7 +46,7 @@ model:
         intermediate_size: 1024
         layer_norm_eps: 1e-5
         use_cache: true
-    ignore_index: 256
+    ignore_index: 0  # PAD token ID (was 256 in old tokenizer)
     label_smoothing: 0.1
 
 # Training configuration
