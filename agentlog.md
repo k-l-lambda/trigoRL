@@ -5607,3 +5607,1230 @@ def evaluate_models(model_new, model_best, num_games=100):
 
 </details>
 
+
+> Given that we're using autoregressive language models for the policy network, what are the architectural recommendations for the value network?
+
+<details>
+<summary>Dual-head architecture design with [VAL] token for value extraction</summary>
+
+### Overview
+
+Designed a comprehensive dual-head architecture combining policy and value networks using a special [VAL] token mechanism, inspired by BERT's [CLS] token approach. This allows efficient joint training while maintaining the autoregressive nature of the language model.
+
+### Architecture Design: [VAL] Token Approach
+
+**Concept**: Insert a special [VAL] token whose hidden state is fed into an MLP to produce scalar value predictions.
+
+**Input format**:
+```
+[VAL] t1 t2 t3 ... tn
+  ↓
+value prediction
+```
+
+### Recommended Architecture: Shared Encoder + Dual Heads
+
+```python
+class DualHeadCausalLM(nn.Module):
+    """
+    AlphaGo Zero-style dual-head language model
+
+    Architecture:
+        TGN Input → Shared Transformer → { Policy Head, Value Head }
+    """
+
+    def __init__(self, base_config, value_config):
+        # 1. Extend vocabulary (add [VAL] token)
+        vocab_size = base_config['vocab_size']
+        self.val_token_id = vocab_size  # [VAL] token ID
+        extended_vocab_size = vocab_size + 1
+
+        # 2. Shared encoder (GPT-2/LLaMA/RWKV)
+        self.encoder = GPT2Model.from_config(base_config)
+
+        # 3. Policy head (standard LM head)
+        self.policy_head = nn.Linear(hidden_size, vocab_size)
+
+        # 4. Value head (from [VAL] token)
+        self.value_head = nn.Sequential(
+            nn.Linear(hidden_size, 256),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 1),
+            nn.Tanh()  # Output range [-1, 1]
+        )
+```
+
+### Key Advantages ✅
+
+1. **Parameter Sharing**: Policy and value share entire Transformer encoder (maximize parameter utilization)
+2. **Feature Reuse**: AlphaGo Zero verified architecture (+600 Elo)
+3. **Efficiency**: Single forward pass for both policy and value
+4. **Memory Friendly**: 50% less memory than two separate models
+
+### Value Loss Function
+
+**Recommended: MSE Loss (AlphaGo Zero approach)**
+
+```python
+# AlphaGo Zero loss function
+value_loss = F.mse_loss(pred_value, target_value)
+
+# Complete loss
+loss = policy_loss + value_loss + L2_regularization
+```
+
+**Comparison of loss functions**:
+
+| Loss Function | Formula | Advantages | Disadvantages | Recommendation |
+|--------------|---------|------------|---------------|----------------|
+| **MSE** | `(v - z)²` | Simple, stable, AlphaGo verified | Sensitive to outliers | ⭐⭐⭐⭐⭐ |
+| **Huber** | Smooth L1 | Robust to outliers | Introduces hyperparameter β | ⭐⭐⭐⭐ |
+| **MAE** | `\|v - z\|` | Most robust to outliers | Non-continuous gradient | ⭐⭐⭐ |
+| **Cross Entropy** | Classification loss | Stable training | Loses information from discretization | ⭐⭐ |
+
+### Value Label Determination
+
+**Recommended: Monte Carlo Return (final game result)**
+
+```python
+def compute_value_targets(game_history, final_result):
+    """
+    Compute value target for each state
+
+    Args:
+        game_history: Game history [(state, player, action), ...]
+        final_result: Final game result {-1: black loss, 0: draw, +1: black win}
+
+    Returns:
+        value_targets: Value label for each state
+    """
+    value_targets = []
+
+    for state, player, action in game_history:
+        # Value from current player's perspective
+        if player == 'black':
+            target_value = final_result  # Black perspective
+        else:
+            target_value = -final_result  # White perspective (inverted)
+
+        value_targets.append(target_value)
+
+    return value_targets
+```
+
+**Key points**:
+1. **Value range**: `{-1, 0, +1}` three discrete values
+   - `-1`: Current player loses
+   - `0`: Draw
+   - `+1`: Current player wins
+
+2. **Player perspective**: Value always defined from **current player** perspective
+   - Black's moves: value = final result (black perspective)
+   - White's moves: value = -final result (white perspective)
+
+3. **No discount factor**: γ = 1.0 (AlphaGo Zero does not use discount)
+   - Go/Trigo are deterministic terminal games
+   - True value of each state is the final result
+
+### Comparison with Other Approaches
+
+**Approach 1: Shared Encoder + Dual Heads** ⭐⭐⭐⭐⭐ (Recommended)
+- Advantages: Maximum parameter sharing, efficient, AlphaGo Zero verified
+- Disadvantages: None significant
+- **This is the recommended approach**
+
+**Approach 2: Separate Value Network** ⭐⭐
+- Advantages: Independent training, different architectures possible
+- Disadvantages: 2x parameters, 2x inference time, less effective feature sharing
+
+**Approach 3: Value from Policy Hidden States** ⭐⭐⭐
+- Advantages: Leverages pretrained policy features
+- Disadvantages: Policy network doesn't benefit from value signal
+
+### Joint Training Strategy
+
+**Recommended: Weighted Joint Training + Warmup**
+
+```python
+def train_step(model, batch, optimizer, config):
+    """Joint training step"""
+
+    input_ids = batch['input_ids']
+    target_actions = batch['target_action']
+    target_values = batch['target_value']
+
+    # Forward pass
+    policy_logits, pred_values = model(input_ids)
+
+    # Compute losses
+    policy_loss = F.cross_entropy(policy_logits[:, -1, :], target_actions)
+    value_loss = F.mse_loss(pred_values.squeeze(), target_values.float())
+
+    # Dynamic weighting
+    policy_weight, value_weight = get_dynamic_weights(global_step)
+
+    # Total loss
+    total_loss = policy_weight * policy_loss + value_weight * value_loss
+
+    # Backward and optimize
+    optimizer.zero_grad()
+    total_loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+    optimizer.step()
+```
+
+**Training strategies compared**:
+
+| Strategy | Advantages | Disadvantages | Recommendation |
+|----------|------------|---------------|----------------|
+| **Joint optimization** | Feature sharing, efficient, AlphaGo Zero style | Potential gradient conflicts | ⭐⭐⭐⭐⭐ |
+| **Staged training** | Avoids conflicts, easy debugging | 2x training time, poor feature sharing | ⭐⭐ |
+| **Alternating training** | Balanced training | Complex implementation, inefficient | ⭐⭐ |
+| **Weighted joint + warmup** | Best of both worlds, tunable | Requires hyperparameter tuning | ⭐⭐⭐⭐⭐ |
+
+**Warmup strategy**:
+```python
+# First 1000 steps: train policy only
+if global_step < 1000:
+    loss = policy_loss
+# Then: joint training
+else:
+    loss = policy_loss + value_loss
+```
+
+### Configuration Example
+
+```yaml
+model:
+  type: DualHeadGPT2
+  config:
+    vocab_size: 259  # TGN vocabulary
+    hidden_size: 256
+    num_layers: 6
+    num_heads: 8
+    max_seq_len: 512
+
+  value_head:
+    hidden_dim: 256
+    dropout: 0.1
+
+training:
+  # Loss configuration
+  value_loss_type: "mse"
+  value_loss_weight: 1.0
+  l2_weight: 1e-4
+
+  # Label configuration
+  value_target_type: "mc_return"
+  use_player_perspective: true
+
+  # Optimizer
+  optimizer:
+    type: "sgd"
+    lr: 0.01
+    momentum: 0.9
+
+  # Gradient clipping
+  grad_clip: 1.0
+
+  # Warmup
+  warmup_steps: 1000
+```
+
+### Key Technical Details
+
+**1. Pooling Strategy Selection**
+
+| Method | Use Case | Advantages | Disadvantages |
+|--------|----------|------------|---------------|
+| **last** | TGN sequence ends with current position | Simple, efficient | May lose history |
+| **mean** | Need to consider full game history | Global information | Can be noisy |
+| **max** | Key moves decide outcome | Captures critical info | Unstable |
+| **attention** | Need dynamic weighting | Most flexible | More parameters |
+
+**Recommendation**: Start with `last`, try `attention` if results are poor
+
+**2. Loss Function Weighting**
+
+```python
+# AlphaGo Zero uses equal weights
+loss = policy_loss + value_loss + L2_reg
+
+# But you can adjust
+loss = policy_loss + lambda_v * value_loss
+# lambda_v ∈ [0.1, 1.0], determined by experimentation
+```
+
+**3. Value Range Normalization**
+
+```python
+# Value head outputs tanh normalized to [-1, 1]
+value = torch.tanh(self.value_mlp(pooled))
+
+# Training targets also need normalization
+outcomes = {-1: loss, 0: draw, +1: win}
+```
+
+### Files to Create
+
+**New files needed**:
+- `trigor/models/dualHeadCausalLM.py` - Dual-head model implementation
+- `trigor/training/dualHeadTrainer.py` - Joint training pipeline
+- `trigor/data/valueLabels.py` - Value label generation utilities
+
+**Modified files**:
+- `trigor/data/tokenizer.py` - Add [VAL] special token
+- Training configs - Add value head configuration
+
+</details>
+
+
+> Given that our policy network uses autoregressive language models, will the value output head and policy output head be optimized simultaneously?
+
+<details>
+<summary>Joint optimization strategy analysis for policy and value heads</summary>
+
+### Answer: Yes, they will be optimized simultaneously
+
+```python
+# In our approach
+total_loss = policy_loss + value_loss
+total_loss.backward()  # ← Compute gradients for all parameters simultaneously
+optimizer.step()       # ← Update encoder, policy head, value head together
+```
+
+### Training Strategy Comparison
+
+**Strategy A: Joint Optimization (Recommended)** ⭐⭐⭐⭐⭐
+
+```python
+def train_step_joint(model, batch, optimizer):
+    """Policy and value heads optimized simultaneously"""
+
+    # Forward pass - single forward propagation
+    policy_logits, pred_values = model(input_ids)
+
+    # Compute both losses
+    policy_loss = F.cross_entropy(policy_logits[:, -1, :], target_actions)
+    value_loss = F.mse_loss(pred_values.squeeze(), target_values.float())
+
+    # Joint loss
+    total_loss = policy_loss + value_loss
+
+    # Backward - compute gradients for all parameters simultaneously
+    optimizer.zero_grad()
+    total_loss.backward()
+    optimizer.step()
+```
+
+**Gradient flow**:
+```
+Input → [VAL] t1 t2 t3 ... tn
+          ↓
+    ┌─────────────────┐
+    │  Shared Encoder │  ← Receives gradients from both losses
+    └─────────────────┘
+           ↓
+    ┌──────┴──────┐
+    ↓             ↓
+┌────────┐   ┌─────────┐
+│Policy  │   │ Value   │
+│ Head   │   │  Head   │
+└────────┘   └─────────┘
+    ↓             ↓
+policy_loss   value_loss
+    └──────┬──────┘
+           ↓
+      total_loss.backward()
+```
+
+**Advantages**:
+- ✅ Feature sharing: Encoder learns features useful for both tasks
+- ✅ Efficient: Single forward + backward pass
+- ✅ Regularization: Two tasks regularize each other
+- ✅ AlphaGo Zero verified
+
+**Disadvantages**:
+- ⚠️ Gradient conflicts: Gradients may point in opposite directions
+- ⚠️ Different learning speeds: Policy and value may converge at different rates
+- ⚠️ Hyperparameter sensitive: Need to balance loss weights
+
+**Strategy B: Staged Training**
+
+Train policy first, then value (or vice versa). Not recommended due to:
+- ❌ 2x training time
+- ❌ Poor feature sharing
+- ❌ Doesn't match AlphaGo Zero approach
+
+**Strategy C: Alternating Training**
+
+Alternate between policy and value updates. Not recommended due to:
+- ❌ Complex implementation
+- ❌ Inefficient (2x forward passes)
+
+**Strategy D: Weighted Joint Training + Warmup (Recommended)** ⭐⭐⭐⭐⭐
+
+```python
+class DualHeadTrainer:
+    def train_step(self, batch):
+        # Forward pass
+        policy_logits, pred_values = self.model(input_ids)
+
+        # Compute losses
+        policy_loss = F.cross_entropy(...)
+        value_loss = F.mse_loss(...)
+
+        # Dynamic weighting
+        policy_weight, value_weight = self._get_weights()
+
+        # Total loss
+        total_loss = policy_weight * policy_loss + value_weight * value_loss
+
+        # Backward and optimize
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        self.optimizer.step()
+
+    def _get_weights(self):
+        # Warmup: first N steps train policy only
+        if self.global_step < self.warmup_steps:
+            return 1.0, 0.0  # Policy only
+
+        # Normal training: AlphaGo Zero style (equal weights)
+        return 1.0, 1.0
+```
+
+### Key Technical Details
+
+**1. Gradient Conflict Detection**
+
+```python
+def detect_gradient_conflict(model):
+    """Detect gradient conflicts between policy and value"""
+
+    policy_loss = compute_policy_loss(...)
+    value_loss = compute_value_loss(...)
+
+    # Policy gradients
+    policy_grads = torch.autograd.grad(
+        policy_loss,
+        model.encoder.parameters(),
+        retain_graph=True
+    )
+
+    # Value gradients
+    value_grads = torch.autograd.grad(
+        value_loss,
+        model.encoder.parameters()
+    )
+
+    # Compute cosine similarity
+    # cosine_sim > 0: gradients aligned (good)
+    # cosine_sim < 0: gradients conflict (need adjustment)
+```
+
+**How to handle conflicts**:
+- If `cosine_sim < -0.5`: Increase `value_weight` or use warmup
+- If `cosine_sim > 0.5`: Good, continue joint training
+
+**2. Per-Parameter Learning Rates**
+
+```python
+# Set different learning rates for different components
+optimizer = torch.optim.SGD([
+    {'params': model.encoder.parameters(), 'lr': 0.01},      # Shared encoder
+    {'params': model.policy_head.parameters(), 'lr': 0.02},  # Policy head faster
+    {'params': model.value_head.parameters(), 'lr': 0.01},   # Value head baseline
+], momentum=0.9)
+```
+
+**3. Monitoring Training Balance**
+
+```python
+def monitor_training_balance(metrics_history):
+    """Monitor training balance between tasks"""
+
+    recent_policy_loss = metrics_history['policy_loss'][-100:]
+    recent_value_loss = metrics_history['value_loss'][-100:]
+
+    policy_stable = np.std(recent_policy_loss) < 0.01
+    value_stable = np.std(recent_value_loss) < 0.01
+
+    if policy_stable and not value_stable:
+        print("⚠️ Policy converged but Value hasn't - consider increasing value_weight")
+    elif value_stable and not policy_stable:
+        print("⚠️ Value converged but Policy hasn't - consider increasing policy_weight")
+```
+
+### AlphaGo Zero Practice
+
+**AlphaGo Zero's approach from the paper**:
+
+```python
+# AlphaGo Zero loss function
+loss = (z - v)² - π^T log p + c||θ||²
+       ↑          ↑            ↑
+    value loss  policy loss  L2 reg
+
+# Key points:
+# 1. Equal weight joint training (no extra weight coefficients)
+# 2. Single optimizer
+# 3. Unified learning rate (0.01 with momentum 0.9)
+# 4. Gradient clipping (though not mentioned in paper)
+```
+
+**Why they did this**:
+1. Simple and effective: Equal weights work well in practice
+2. Mutual regularization: Policy and Value constrain each other
+3. Efficient: Single backward pass
+
+### Configuration Recommendations
+
+```yaml
+training:
+  # Optimization strategy
+  joint_training: true  # Optimize both heads simultaneously
+
+  # Warmup strategy
+  warmup_steps: 1000  # First 1000 steps train policy only
+
+  # Loss weighting
+  policy_weight: 1.0
+  value_weight: 1.0  # AlphaGo Zero uses equal weights
+
+  # Learning rate
+  optimizer:
+    type: "sgd"
+    lr: 0.01
+    momentum: 0.9
+
+  # Gradient clipping
+  grad_clip: 1.0
+
+  # Monitoring
+  check_gradient_conflict: true
+  check_interval: 500
+```
+
+### Troubleshooting Guide
+
+| Symptom | Cause | Solution |
+|---------|-------|----------|
+| Value loss not decreasing | Value signal too weak | Increase `value_weight` to 1.5-2.0 |
+| Policy loss not decreasing | Interfered by value gradients | Increase `warmup_steps` |
+| Both losses oscillating | Gradient conflicts | Strengthen gradient clipping or use Huber loss |
+| Value predictions all zero | Value head not learning | Check data labels, increase `value_weight` |
+
+### Best Practices Summary
+
+1. ✅ **Base approach**: Joint equal-weight training (AlphaGo Zero style)
+2. ✅ **Add Warmup**: First 1000 steps train policy only to establish foundation
+3. ✅ **Gradient clipping**: `max_norm=1.0` prevents training instability
+4. ✅ **Monitor metrics**: Track both policy and value convergence
+5. ⚠️ **Adjust weights**: Only adjust `value_weight` when training is imbalanced
+
+</details>
+
+
+> Considering that our input TGN game records are entire trajectories from one game, should we insert [VAL] after every move to add value labels?
+
+<details>
+<summary>Multi-VAL token architecture for trajectory training</summary>
+
+### Answer: Yes, absolutely! Insert [VAL] after every move
+
+Since the input is a complete trajectory, we should **fully utilize value information from every intermediate state**. This is exactly AlphaGo Zero's approach!
+
+### Architecture Comparison
+
+**Approach A: Single [VAL] at beginning** ❌ Not recommended
+```
+[VAL] move1 move2 move3 ... moveN
+  ↓
+value(entire game)
+```
+Problems:
+- ❌ Wastes intermediate state information
+- ❌ One trajectory generates only 1 training sample
+- ❌ [VAL] needs to see future (causality issue)
+
+**Approach B: [VAL] after every move** ⭐⭐⭐ Strongly recommended
+```
+move1 [VAL] move2 [VAL] move3 [VAL] ... moveN [VAL]
+       ↓            ↓            ↓              ↓
+   value(t1)   value(t2)   value(t3)    value(tN)
+```
+Advantages:
+- ✅ Value prediction for every state (AlphaGo Zero style)
+- ✅ One trajectory generates N training samples (high data utilization)
+- ✅ Causality correct: each [VAL] only sees previous moves
+- ✅ Can learn how value changes as game progresses
+
+**Approach C: [VAL] only at end** ⭐ Suboptimal
+```
+move1 move2 move3 ... moveN [VAL]
+                              ↓
+                        value(final)
+```
+- ✅ Simple implementation
+- ⚠️ One trajectory generates only 1 sample
+- ⚠️ Early move information wasted
+
+### Recommended Architecture: [VAL] After Every Move
+
+```python
+class TrajectoryDualHeadCausalLM(nn.Module):
+    """
+    Dual-head model supporting trajectory training
+
+    Input format:
+        move1 [VAL] move2 [VAL] move3 [VAL] ... moveN [VAL]
+
+    Output:
+        - Policy: Predict next token at each move position
+        - Value: Predict current position value at each [VAL] position
+    """
+
+    def forward(self, input_ids, value_mask=None):
+        """
+        Args:
+            input_ids: (B, L) - Interleaved moves and [VAL] tokens
+                Example: [move1, val_token, move2, val_token, ...]
+            value_mask: (B, L) - Marks [VAL] token positions
+                Example: [0, 1, 0, 1, ...] (1 indicates [VAL] position)
+
+        Returns:
+            policy_logits: (B, L, vocab_size) - Policy for all positions
+            values: (B, num_val_tokens) - Values for all [VAL] positions
+        """
+        # Encoder forward
+        outputs = self.encoder(input_ids=input_ids, return_dict=True)
+        hidden_states = outputs.last_hidden_state  # (B, L, D)
+
+        # Policy prediction (all positions)
+        policy_logits = self.policy_head(hidden_states)
+
+        # Value prediction ([VAL] positions only)
+        if value_mask is None:
+            value_mask = (input_ids == self.val_token_id)
+
+        val_hidden = hidden_states[value_mask]  # (num_val_tokens, D)
+        values = self.value_head(val_hidden)    # (num_val_tokens, 1)
+
+        return policy_logits, values, value_mask
+```
+
+### Data Format Design
+
+```python
+class TrajectoryDataset(Dataset):
+    """Trajectory dataset: each sample is a complete game"""
+
+    def __getitem__(self, idx):
+        game = self.games[idx]
+        moves = game['moves']        # [(state, action), ...]
+        final_result = game['result']  # -1, 0, +1
+        players = game['players']    # ['black', 'white', ...]
+
+        # Build input sequence
+        input_ids = []
+        value_positions = []
+        value_targets = []
+        policy_positions = []
+        policy_targets = []
+
+        for step, (state, action) in enumerate(moves):
+            # 1. Add move tokens
+            move_tokens = self.state_to_tokens(state)
+            move_start = len(input_ids)
+            input_ids.extend(move_tokens)
+            move_end = len(input_ids)
+
+            # 2. Policy label: predict action
+            action_token = self.action_to_token(action)
+            policy_positions.append(move_end - 1)
+            policy_targets.append(action_token)
+
+            # 3. Add [VAL] token
+            input_ids.append(self.val_token_id)
+            val_position = len(input_ids) - 1
+            value_positions.append(val_position)
+
+            # 4. Value label: from current player perspective
+            current_player = players[step]
+            if current_player == 'black':
+                value_target = final_result
+            else:
+                value_target = -final_result
+            value_targets.append(value_target)
+
+        return {
+            'input_ids': torch.tensor(input_ids),
+            'value_targets': torch.tensor(value_targets),
+            'policy_targets': torch.tensor(policy_targets),
+            # ...
+        }
+```
+
+**Example data**:
+```python
+# A 3-move game
+input_ids = [
+    # Move 1 (Black)
+    t1, t2, t3,      # move1 TGN tokens
+    val_token_id,    # [VAL] → value_target = final_result
+
+    # Move 2 (White)
+    t4, t5, t6,      # move2 TGN tokens
+    val_token_id,    # [VAL] → value_target = -final_result
+
+    # Move 3 (Black)
+    t7, t8, t9,      # move3 TGN tokens
+    val_token_id,    # [VAL] → value_target = final_result
+]
+
+value_positions = [3, 7, 11]
+value_targets = [1.0, -1.0, 1.0]  # Assuming black wins
+```
+
+### Training Loss Function
+
+```python
+def compute_trajectory_loss(model, batch):
+    """
+    Compute joint loss for trajectory
+
+    Key points:
+    1. Policy loss: computed for all move positions
+    2. Value loss: computed for all [VAL] positions
+    3. One trajectory generates N value samples
+    """
+    input_ids = batch['input_ids']
+    value_targets = batch['value_targets']
+    policy_targets = batch['policy_targets']
+
+    # Forward
+    policy_logits, pred_values, _ = model(input_ids)
+
+    # 1. Policy loss (all move positions)
+    policy_loss = compute_policy_loss(policy_logits, policy_targets)
+
+    # 2. Value loss (all [VAL] positions)
+    pred_values = pred_values.squeeze()
+    value_loss = F.mse_loss(pred_values, value_targets.float())
+
+    # 3. Total loss
+    total_loss = policy_loss + value_loss
+
+    return total_loss, policy_loss, value_loss
+```
+
+### Data Utilization Comparison
+
+| Approach | Trajectory Length | Training Samples | Data Utilization |
+|----------|------------------|------------------|------------------|
+| Single [VAL] | 50 moves | 1 | 2% |
+| [VAL] after every move | 50 moves | 50 | 100% ⭐ |
+| [VAL] only at end | 50 moves | 1 | 2% |
+
+**Calculation**:
+```python
+# Assume 1000 games, average 50 moves each
+games = 1000
+avg_moves = 50
+
+# Approach A/C: Single sample
+samples_single = games * 1 = 1,000
+
+# Approach B: Multiple samples
+samples_multi = games * avg_moves = 50,000
+
+# 50x data utilization improvement!
+```
+
+### Learning Effect Comparison
+
+```python
+# Approach B advantage: Learning temporal dynamics of value
+
+# Value changes during game
+move_1:  value = 0.1   (slight advantage)
+move_10: value = 0.3   (advantage growing)
+move_20: value = 0.6   (clearly ahead)
+move_30: value = 0.9   (winning position)
+move_40: value = 1.0   (certain victory)
+
+# Network learns:
+# 1. How value changes as game progresses
+# 2. Where critical turning points are
+# 3. Different evaluation criteria at different stages
+```
+
+This is exactly AlphaGo Zero's approach!
+
+### Configuration Example
+
+```yaml
+model:
+  type: TrajectoryDualHeadCausalLM
+  config:
+    vocab_size: 259  # Original TGN vocabulary
+    # Vocab automatically extended to 260 (add [VAL])
+    hidden_size: 256
+    num_layers: 6
+    num_heads: 8
+    max_seq_len: 2048  # Long enough for trajectory
+
+data:
+  format: "trajectory"
+  max_trajectory_length: 1000
+
+  # Value label configuration
+  value_discount: 1.0  # gamma (AlphaGo Zero uses 1.0)
+  value_labels: "mc_return"
+
+training:
+  batch_size: 4  # Trajectories are long, small batch
+  accumulation_steps: 8  # Gradient accumulation for effective batch_size=32
+
+  # Loss weighting
+  policy_weight: 1.0
+  value_weight: 1.0
+```
+
+### Expected Performance
+
+**Data volume comparison**:
+```python
+num_games = 1000
+avg_moves_per_game = 50
+
+# Approach A (single [VAL])
+total_samples_A = 1,000
+
+# Approach B ([VAL] after every move)
+total_samples_B = 50,000
+
+# 50x efficiency improvement!
+```
+
+**Value prediction accuracy**:
+```python
+# Expected metrics (empirical values)
+
+# Early steps (< 10 moves)
+- Value sign accuracy: 50-60%  # Hard to predict
+- Value MSE: 0.8-1.0
+
+# Mid-game steps (10-30 moves)
+- Value sign accuracy: 70-80%  # Gradually clearer
+- Value MSE: 0.4-0.6
+
+# Late-game steps (> 30 moves)
+- Value sign accuracy: 85-95%  # Nearly certain
+- Value MSE: 0.1-0.3
+```
+
+### Key Technical Details
+
+**1. [VAL] Token Position Encoding**
+
+GPT-2 already has built-in absolute position encoding, so [VAL] will automatically get correct position information.
+
+**2. Value Label Discount (optional)**
+
+```python
+def compute_discounted_value_targets(moves, final_result, gamma=1.0):
+    """
+    Compute value labels for each step in trajectory
+
+    Optional: use discount factor to consider temporal distance
+    """
+    num_moves = len(moves)
+    value_targets = []
+
+    for step in range(num_moves):
+        # Standard AlphaGo Zero: no discount (gamma=1.0)
+        value_target = final_result
+
+        # Optional: consider temporal discount
+        # steps_to_end = num_moves - step
+        # value_target = final_result * (gamma ** steps_to_end)
+
+        value_targets.append(value_target)
+
+    return value_targets
+```
+
+**Recommendation**: γ = 1.0 (AlphaGo Zero style), because Go/Trigo value doesn't decay with time
+
+**3. Attention Mask Handling**
+
+GPT-2 has built-in causal attention mask, so each [VAL] automatically only sees previous moves. No manual handling needed!
+
+### Summary
+
+**Answer to your question: Yes, insert [VAL] after every move!**
+
+**Architecture**:
+```
+move1 [VAL] move2 [VAL] move3 [VAL] ... moveN [VAL]
+       ↓            ↓            ↓              ↓
+   v(s1)        v(s2)        v(s3)         v(sN)
+```
+
+**Core advantages**:
+1. ✅ **Data utilization**: 50x improvement (each trajectory generates N samples)
+2. ✅ **Matches AlphaGo Zero**: Train value for every state
+3. ✅ **Learn dynamics**: Capture how value changes over time
+4. ✅ **Causality correct**: Each [VAL] only sees previous moves
+
+**Implementation key points**:
+1. Add `[VAL]` special token to tokenizer (ID = vocab_size)
+2. Insert `[VAL]` after every move in dataset
+3. Compute value loss for all `[VAL]` positions during training
+4. Use padding to handle different trajectory lengths
+
+</details>
+
+
+> Since AlphaGo Zero doesn't use discount, does that mean every step's value label is 1 or -1? Or is it based on some other rule?
+
+<details>
+<summary>AlphaGo Zero value label assignment strategy explained</summary>
+
+### Core Answer: Yes, in the basic version every step's value label is ±1 or 0
+
+```python
+# AlphaGo Zero value label generation
+def generate_value_labels(game_trajectory, final_result):
+    """
+    game_trajectory: [(state, player, action), ...]
+    final_result: +1 (black wins), -1 (black loses), 0 (draw)
+    """
+    value_labels = []
+
+    for state, player, action in game_trajectory:
+        # Key: from current player's perspective
+        if player == 'black':
+            value_label = final_result  # Black perspective
+        else:
+            value_label = -final_result  # White perspective (inverted)
+
+        value_labels.append(value_label)
+
+    return value_labels
+
+# Example: Game where black wins
+final_result = +1  # Black wins
+
+# Generated labels
+step_1_black: value_label = +1  # Black plays, label = +1
+step_2_white: value_label = -1  # White plays, label = -1 (black win = white loss)
+step_3_black: value_label = +1  # Black plays, label = +1
+step_4_white: value_label = -1  # White plays, label = -1
+...
+step_N_black: value_label = +1  # Last step, label still +1
+```
+
+### Key Understanding Points
+
+**1. Why use same final result for all steps?**
+
+```python
+# No discount means:
+# ❌ NOT this:
+step_1: value = final_result * gamma^(N-1) = 0.99^49 ≈ 0.61
+step_2: value = final_result * gamma^(N-2) = 0.99^48 ≈ 0.62
+...
+step_50: value = final_result * gamma^0 = 1.0
+
+# ✅ But this:
+step_1: value = final_result = +1
+step_2: value = final_result = -1 (white perspective)
+...
+step_50: value = final_result = +1
+```
+
+**Reason**:
+- Go is a **zero-sum game**, final result completely determines game value
+- An early move and a late move contribute **equally** to victory
+- No concept of "temporal preference" (unlike robot control tasks that prefer faster completion)
+
+**2. But isn't this crude? Early positions aren't clear!**
+
+Your intuition is correct! There's a **subtle but important** point:
+
+```python
+# Surface level:
+# Game just started, position balanced → value label = +1 ???
+# Isn't this misleading for the network?
+
+# Reality:
+# AlphaGo Zero doesn't train neural network alone
+# It uses MCTS + Neural Network combination!
+```
+
+#### AlphaGo Zero's Complete Pipeline
+
+```
+Self-play phase (generate data):
+┌─────────────────────────────────────────┐
+│  Each step runs MCTS search              │
+│  ├─ Neural network gives initial estimate │
+│  ├─ MCTS performs 1600 simulations       │
+│  └─ Get improved policy and value estimate│
+└─────────────────────────────────────────┘
+              ↓
+      Play complete game
+              ↓
+      Get final result z = ±1
+              ↓
+┌─────────────────────────────────────────┐
+│  Training phase                          │
+│  Use final result z as value label       │
+│  Train network: v → z                    │
+└─────────────────────────────────────────┘
+```
+
+**Key**: Although training labels are final results (crude), but:
+1. **MCTS ensures high-quality moves**
+2. These high-quality moves indeed lead to final victory
+3. So using final result for training is reasonable
+
+### Value Label Approach Comparison
+
+**Approach A: Monte Carlo Return (AlphaGo Zero paper version)** ⭐
+
+```python
+def compute_value_labels_mc(trajectory, final_result):
+    """
+    Simplest approach: all states use final result
+    """
+    labels = []
+    for state, player in trajectory:
+        if player == 'black':
+            label = final_result  # +1, 0, or -1
+        else:
+            label = -final_result
+        labels.append(label)
+
+    return labels
+
+# Characteristics:
+# - All state labels are ±1 or 0
+# - Simple, unbiased
+# - High variance (early state "noise" is large)
+```
+
+**Paper description**:
+> Each position s encountered is stored together with the game outcome z as a training example.
+
+Clearly states: use **game outcome z** as training sample.
+
+**Approach B: MCTS Value (advanced version, AlphaGo Zero may actually use)** ⭐⭐
+
+```python
+def compute_value_labels_mcts(trajectory, mcts_values):
+    """
+    Use MCTS root node value from search
+
+    Args:
+        trajectory: Game history
+        mcts_values: Root node value estimate from MCTS at each step
+                     Continuous values, range [-1, +1]
+    """
+    labels = []
+    for i, (state, player) in enumerate(trajectory):
+        # MCTS value is already from current player's perspective
+        mcts_value = mcts_values[i]  # Continuous value, e.g. 0.23, -0.45, 0.87
+        labels.append(mcts_value)
+
+    return labels
+
+# Characteristics:
+# - Labels are continuous values, range [-1, +1]
+# - More accurate (MCTS searched 1600 simulations)
+# - Low variance (more stable estimate)
+# - But needs to store MCTS results (high memory usage)
+```
+
+**MCTS value calculation**:
+```python
+# After MCTS search ends
+def get_mcts_root_value(root_node):
+    """
+    MCTS root node value = average result of all simulations
+    """
+    # root_node.W: cumulative value
+    # root_node.N: visit count
+    return root_node.W / root_node.N
+
+# Example:
+# - 1600 simulations, 950 wins, 650 losses
+# - MCTS value = (950 - 650) / 1600 = 0.1875
+```
+
+**Approach C: Hybrid (mixed, commonly used in practice)** ⭐⭐⭐
+
+```python
+def compute_value_labels_hybrid(trajectory, final_result, mcts_values, lambda_mix=0.5):
+    """
+    Mix final result and MCTS value
+
+    Similar to TD(λ) idea
+    """
+    labels = []
+    for i, (state, player) in enumerate(trajectory):
+        # MC return
+        if player == 'black':
+            mc_value = final_result
+        else:
+            mc_value = -final_result
+
+        # MCTS value
+        mcts_value = mcts_values[i]
+
+        # Mix
+        hybrid_value = lambda_mix * mcts_value + (1 - lambda_mix) * mc_value
+        labels.append(hybrid_value)
+
+    return labels
+
+# Characteristics:
+# - Balances MCTS accuracy and MC unbiasedness
+# - lambda_mix=0: Pure MC (AlphaGo Zero paper)
+# - lambda_mix=1: Pure MCTS (more accurate but possibly biased)
+# - lambda_mix=0.5: Compromise
+```
+
+### Why This Works
+
+**Key insight**:
+
+```python
+# Early step value labels look very "noisy"
+# Example: opening move 3, position balanced, but label is +1 (because black eventually wins)
+
+# But! What does the network learn?
+
+# After many games:
+# - Opening patterns that lead to victory → value label +1
+# - Opening patterns that lead to defeat → value label -1
+
+# Network learns statistically:
+# "If I take this action in this position,
+#  on average across many games, will it lead to victory or defeat?"
+```
+
+**Statistical averaging effect**:
+
+```python
+# Assume opening position s1
+# In 1000 training games:
+# - 600 games from s1 end with black win → label +1
+# - 400 games from s1 end with black loss → label -1
+
+# Network learns expected value:
+# E[v(s1)] ≈ (600 * 1 + 400 * (-1)) / 1000 = 0.2
+
+# This is exactly the true value of s1!
+```
+
+**So**: Although individual sample labels are ±1 (crude), statistical average over many samples gives correct value.
+
+### Practical Recommendations
+
+**Stage 1: Simple MC Return (recommended for initial implementation)**
+
+```python
+# trigor/data/trajectoryDataset.py
+
+class SimpleTrajectoryDataset(Dataset):
+    """Simple version using Monte Carlo Return"""
+
+    def __getitem__(self, idx):
+        game = self.games[idx]
+        trajectory = game['trajectory']
+        final_result = game['result']  # ±1 or 0
+
+        # Generate value labels
+        value_labels = []
+        for state, player, action in trajectory:
+            if player == 'black':
+                value_label = final_result
+            else:
+                value_label = -final_result
+            value_labels.append(value_label)
+
+        return {
+            'input_ids': input_ids,
+            'value_targets': value_labels,  # All ±1 or 0
+            # ...
+        }
+```
+
+**Advantages**:
+- ✅ Simple implementation
+- ✅ Matches AlphaGo Zero paper
+- ✅ Unbiased estimate
+- ✅ No need for MCTS (saves computation)
+
+**Disadvantages**:
+- ⚠️ High variance (early step labels are noisy)
+- ⚠️ Requires lots of data to converge
+
+**Stage 2: MCTS Enhancement (optional, if Stage 1 doesn't work well)**
+
+Use MCTS values from self-play as more accurate labels. Only implement if:
+- Training converges slowly
+- Early step value predictions are poor
+- Have sufficient compute resources to run MCTS
+
+### Configuration Example
+
+```yaml
+data:
+  value_label_type: "mc_return"  # mc_return, mcts_value, hybrid
+
+  # MC return configuration
+  mc_return:
+    use_final_result: true
+    player_perspective: true
+
+  # MCTS value configuration (if used)
+  mcts_value:
+    use_root_value: true
+    min_simulations: 100
+
+  # Hybrid configuration (if used)
+  hybrid:
+    lambda_mcts: 0.3  # MCTS weight
+    lambda_mc: 0.7    # MC weight
+```
+
+### Summary
+
+**Answer to your question**:
+
+1. **Are AlphaGo Zero value labels ±1 or 0?**
+   - **Yes**, paper uses final game result as labels
+   - Black perspective: black win=+1, black loss=-1, draw=0
+   - White perspective: black win=-1, black loss=+1, draw=0
+
+2. **Based on what rule?**
+   - **Rule**: Final game result from current player's perspective
+   - **No discount** means all steps use same final result
+   - **Statistical averaging**: Network learns correct expected value over many samples
+
+3. **Recommended implementation**:
+   - Start with simple MC Return (±1 labels)
+   - If results are poor, consider MCTS Value (continuous labels)
+
+</details>
+
