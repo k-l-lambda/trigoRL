@@ -1,10 +1,21 @@
 # TGN Value Dataset Configuration
 # For training dual-head networks (policy + value)
 
-type: TGNValueDataset
-data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output/selfplay
-max_length: 8192
-min_length: 10
-max_file_size: 10000
-parse_value: true
-tokenizer_config: {}
+data:
+  type: TGNValueDataset
+  data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output/selfplay
+  max_length: 8192
+  min_length: 10
+  max_file_size: 10000
+  parse_value: true
+  tokenizer_config: {}
+
+  train_split: "*1..8/10"  # 80% training set with shuffle
+  val_split: "9/10"        # 10% validation set without shuffle
+
+  # DataLoader settings
+  loader:
+    batch_size: 1
+    shuffle: true
+    num_workers: 0  # Set to 0 to avoid multiprocessing issues with file I/O
+    pin_memory: true

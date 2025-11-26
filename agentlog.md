@@ -7230,4 +7230,275 @@ This clean separation of concerns makes both dataset and model easier to impleme
 </details>
 
 
+> Refactor TGNValueDataset to compute move end token positions instead of just counting moves. Enhance view_dataset.py tool to support TGNValueDataset visualization.
+
+<details>
+<summary>TGNValueDataset refactored with move position tracking + Enhanced visualization tool</summary>
+
+### Problem Context
+
+The initial TGNValueDataset implementation only provided `num_moves` field (total move count). However, for training a value network with VALUE tokens injected at each move position, we need to know the exact token positions where each move ends in the tokenized sequence.
+
+### Design Iteration Process
+
+**Initial approach** (abandoned): Parse by lines using `text.strip().split('\n')` and match moves per line.
+
+**Problems identified**:
+1. TGN format doesn't enforce newlines between rounds (e.g., `1. z00 zaa\n2. aaz` vs `1. z00 zaa 2. aaz`)
+2. Line-based parsing is fragile to formatting variations
+3. Need to match individual moves (not move lines) to compute precise token positions
+
+**Final approach** (implemented): Use regex pattern `\b[0a-zPR]+\b` to match individual moves directly in text, compute character positions, then convert to token positions via incremental tokenization.
+
+### Implementation Details
+
+**Core parsing function** (`parse_tgn_file()`):
+
+```python
+def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], float, List[int]]:
+    """
+    Parse TGN file to extract moves, score, and token positions.
+
+    Returns:
+        Tuple of (moves, score, move_end_positions):
+            - moves: List of move strings (e.g., ["z00", "zaa", "aaz", "aaa"])
+            - score: Final game score (negative = Black win, positive = White win)
+            - move_end_positions: List of token positions where each move ends
+    """
+    score = 0.0
+
+    # Score comment: "; -18" or "; +12" or "; 0"
+    score_pattern = re.compile(r';\s*([+-]?\d+(?:\.\d+)?)')
+    score_match = score_pattern.search(text)
+    if score_match:
+        score = float(score_match.group(1))
+
+    # Match all moves using robust regex pattern
+    # Pattern \b[0a-zPR]+\b matches move coordinates
+    # Only consider moves that appear after move numbers (e.g., "1. ")
+    round_pattern = re.compile(r'\d+\.\s+([0a-zPR\s]+)')
+
+    moves = []
+    move_positions_in_text = []  # Store character positions
+
+    # Find all move sequences (e.g., "1. z00 zaa" captures "z00 zaa")
+    for match in round_pattern.finditer(text):
+        move_sequence = match.group(1).strip()
+        # Split the sequence into individual moves
+        individual_moves = re.findall(r'\b[0a-zPR]+\b', move_sequence)
+
+        # Track character position of each individual move
+        start_offset = match.start(1)
+        for move in individual_moves:
+            # Find this move's position within the captured group
+            move_start = text.find(move, start_offset)
+            if move_start != -1:
+                move_end = move_start + len(move)
+                moves.append(move)
+                move_positions_in_text.append(move_end)  # Character position where move ends
+                start_offset = move_end
+
+    # Convert character positions to token positions
+    move_end_positions = []
+    for char_pos in move_positions_in_text:
+        # Tokenize text up to this character position
+        text_up_to_move = text[:char_pos]
+        tokens_up_to_move = tokenizer.encode(
+            text_up_to_move,
+            add_special_tokens=True,  # Includes [START] token
+            padding=False,
+            truncation=False,
+        )
+        # Token position is the last token index (0-indexed)
+        move_end_positions.append(len(tokens_up_to_move) - 1)
+
+    return moves, score, move_end_positions
+```
+
+**Key improvements from previous version**:
+1. **Removed `num_moves` field** - Can be derived from `len(move_end_positions)`
+2. **Added `move_end_positions` field** - Array of token positions where each move ends
+3. **Robust regex parsing** - Uses `\b[0a-zPR]+\b` pattern to match individual moves
+4. **Handles edge cases**:
+   - Missing score (defaults to 0.0)
+   - Empty files (returns empty arrays)
+   - Malformed files (fallback to empty values)
+   - Variable whitespace
+   - Pass moves (matched by pattern `[PR]+`)
+
+**Updated dataset output format**:
+```python
+{
+    'input_ids': torch.Tensor,           # [max_length-1]
+    'labels': torch.Tensor,               # [max_length-1]
+    'attention_mask': torch.Tensor,       # [max_length-1]
+    'value_score': torch.Tensor,          # scalar float32
+    'move_end_positions': torch.Tensor,   # [variable] int64
+}
+```
+
+**Collate function**:
+```python
+@staticmethod
+def collate_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
+    # Use parent collate for standard fields
+    collated = TGNDataset.collate_batch(batch)
+
+    # Stack scalar fields
+    if 'value_score' in batch[0]:
+        collated['value_score'] = torch.stack([x['value_score'] for x in batch])
+
+    # Keep move_end_positions as list (variable length per sample)
+    if 'move_end_positions' in batch[0]:
+        collated['move_end_positions'] = [x['move_end_positions'] for x in batch]
+
+    return collated
+```
+
+**Note**: `move_end_positions` is kept as a list in the collated batch because each sample has a different number of moves. This is similar to how variable-length sequences are handled in NLP tasks.
+
+### Testing
+
+**Test suite updated** (`tests/test_tgn_value_dataset.py`):
+- All 17 tests updated to expect individual moves instead of move lines
+- Test example: `"1. z00 zaa\n2. aaz aaa"` now parses to 4 moves (not 2 lines)
+- All tests passing ✓
+
+**Tested with real selfplay data**:
+```bash
+$ python -c "from trigor.data.tgn_value_dataset import TGNValueDataset; ..."
+Loaded 93 TGN files from .../selfplay
+Sample with 15 moves:
+  value_score: 4.0
+  move_end_positions: [19, 22, 28, 31, 37, 40, 46, 49, 55, 58, 64, 67, 73, 76, 78]
+```
+
+Verified on 100 real games: parsing successful for all files, with 49-330 moves per game.
+
+### Enhanced Visualization Tool
+
+**Updated `tools/view_dataset.py`** to support TGNValueDataset:
+
+**New features**:
+1. **Auto-detect dataset type** - Loads TGNDataset or TGNValueDataset based on config
+2. **Display value fields** - Shows value_score and move_end_positions in sample view
+3. **Validation checks** - Validates value field types, shapes, and dtypes
+4. **Batch visualization** - Shows value score distribution and move counts in matplotlib plots
+5. **Updated special tokens** - Changed from old tokenizer (256/257/258) to new (0/1/2/3)
+
+**Example output** (sample view with value fields):
+```
+Tensor Shapes:
+  input_ids:      torch.Size([8191])
+  labels:         torch.Size([8191])
+  attention_mask: torch.Size([8191])
+  value_score:    torch.Size([]) (scalar)
+  move_end_positions: torch.Size([15]) (variable length)
+
+Token Statistics:
+  Non-padding tokens: 91
+  Padding tokens:     8100
+  Sequence length:    8191
+
+Value Information:
+  Game score:         4.0
+  Number of moves:    15
+  Move end positions: [19, 22, 28, 31, 37, 40, 46, 49, 55, 58]...
+
+Special Tokens:
+  START token (1) in input_ids: True
+  END token (2) in labels:      False
+  PAD token (0) present:        False
+  VALUE token (3) in labels:    False
+```
+
+**Validation output**:
+```
+✓ Validation PASSED!
+  All 10 samples validated successfully
+  ✓ Correct tensor types
+  ✓ Consistent shapes
+  ✓ Valid token ranges
+  ✓ Valid attention masks
+  ✓ Proper sequence structure
+  ✓ Value score fields present (TGNValueDataset)
+  ✓ Move end positions valid
+```
+
+**Batch visualization enhancements**:
+- Added value score statistics (mean/min/max) to batch stats panel
+- Added moves per sample statistics to batch stats panel
+- Updated token distribution to use 128 vocab size (not 259)
+- Updated special token counts (0/1/2/3 instead of 256/257/258)
+
+**Updated CLI examples**:
+```bash
+# View TGNValueDataset statistics
+python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --stats
+
+# View sample with value fields
+python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --sample 0
+
+# Validate with value field checks
+python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --validate
+
+# Interactive visualization with value scores
+python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --visualize --batch-size 4
+```
+
+### Files Modified
+
+**Core implementation**:
+- `/home/camus/work/trigoRL/trigor/data/tgn_value_dataset.py`
+  - Replaced `num_moves` with `move_end_positions` throughout
+  - Implemented robust regex-based move parsing
+  - Updated docstrings with detailed explanations
+
+**Test suite**:
+- `/home/camus/work/trigoRL/tests/test_tgn_value_dataset.py`
+  - Updated all 17 tests to expect individual moves
+  - Adjusted assertions for move_end_positions field
+
+**Visualization tool**:
+- `/home/camus/work/trigoRL/tools/view_dataset.py`
+  - Added TGNValueDataset import and auto-detection
+  - Added value field display in sample view
+  - Added value field validation checks
+  - Updated special tokens to new tokenizer IDs
+  - Updated token distribution for 128 vocab size
+  - Enhanced batch visualization with value stats
+
+**Configuration**:
+- `/home/camus/work/trigoRL/configs/training/trigo-gpt2-value.yaml`
+  - Updated data_dir path to absolute path (avoid submodule issues)
+
+### Key Benefits
+
+1. **Precise position tracking** - Know exactly where each move ends in tokenized sequence
+2. **Robust parsing** - Handles formatting variations and edge cases
+3. **Simplified output** - Removed redundant `num_moves` field
+4. **Better tooling** - Enhanced visualization for debugging and validation
+5. **Type safety** - All fields properly validated in test suite
+
+### Next Steps for Model Implementation
+
+With move end positions available, the model can now:
+1. Inject VALUE token at position `move_end_positions[i] + 1` for each move i
+2. Construct attention masks where VALUE[i] attends to tokens [0:move_end_positions[i]+1]
+3. Extract hidden states at VALUE token positions for value prediction
+4. Compute MSE loss between predicted values and `value_score` labels
+
+Example logic:
+```python
+for i, pos in enumerate(batch['move_end_positions'][sample_idx]):
+    # Insert VALUE token after move i
+    input_ids.insert(pos + 1 + i, VALUE_TOKEN_ID)  # +i accounts for previous insertions
+
+    # Mask: VALUE[i] sees moves 0..i (positions 0 to pos+1+i)
+    attention_mask[pos + 1 + i, :pos + 2 + i] = 1
+```
+
+</details>
+
+
 

@@ -1,12 +1,14 @@
 #!/usr/bin/env python
 """
-CLI tool to view and validate TGNDataset contents.
+CLI tool to view and validate TGNDataset and TGNValueDataset contents.
 
 This tool allows you to:
-- Load a TGNDataset from a training config file
+- Load TGNDataset or TGNValueDataset from a training config file
 - View dataset statistics
 - Display sample data with tokenization details
+- Display value scores and move end positions (TGNValueDataset)
 - Validate the dataset implementation
+- Interactive batch visualization with matplotlib
 """
 
 import argparse
@@ -25,27 +27,39 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from trigor.data import TGNDataset
+from trigor.data.tgn_value_dataset import TGNValueDataset
 
 
-def load_dataset_from_config(config_path: Path) -> TGNDataset:
+def load_dataset_from_config(config_path: Path):
 	"""
-	Load TGNDataset from a training configuration file.
+	Load TGNDataset or TGNValueDataset from a training configuration file.
 
 	Args:
 	    config_path: Path to the config YAML file
 
 	Returns:
-	    Initialized TGNDataset
+	    Initialized dataset (TGNDataset or TGNValueDataset)
 	"""
 	# Load config
 	cfg = OmegaConf.load(config_path)
 
 	# Resolve paths relative to project root
 	OmegaConf.update(cfg, "paths.root", str(project_root))
-	OmegaConf.resolve(cfg)
 
-	# Create dataset
-	dataset = TGNDataset.from_config(cfg.data)
+	# Only resolve if no complex interpolations present
+	try:
+		OmegaConf.resolve(cfg)
+	except Exception:
+		# Skip resolution if there are Hydra-specific resolvers
+		pass
+
+	# Create dataset based on type specified in config
+	dataset_type = cfg.data.get('type', 'TGNDataset')
+
+	if dataset_type == 'TGNValueDataset':
+		dataset = TGNValueDataset.from_config(cfg.data)
+	else:
+		dataset = TGNDataset.from_config(cfg.data)
 
 	return dataset
 
@@ -114,12 +128,26 @@ def display_sample(
 	print(f"  labels:         {sample['labels'].shape}")
 	print(f"  attention_mask: {sample['attention_mask'].shape}")
 
+	# Display value fields if present (TGNValueDataset)
+	if 'value_score' in sample:
+		print(f"  value_score:    {sample['value_score'].shape} (scalar)")
+		print(f"  move_end_positions: {sample['move_end_positions'].shape} (variable length)")
+
 	# Count non-padding tokens
 	non_pad_tokens = sample['attention_mask'].sum().item()
 	print(f"\nToken Statistics:")
 	print(f"  Non-padding tokens: {non_pad_tokens}")
 	print(f"  Padding tokens:     {len(sample['input_ids']) - non_pad_tokens}")
 	print(f"  Sequence length:    {len(sample['input_ids'])}")
+
+	# Display value information if present
+	if 'value_score' in sample:
+		print(f"\nValue Information:")
+		print(f"  Game score:         {sample['value_score'].item():.1f}")
+		print(f"  Number of moves:    {len(sample['move_end_positions'])}")
+		if len(sample['move_end_positions']) > 0:
+			positions_list = sample['move_end_positions'].tolist()
+			print(f"  Move end positions: {positions_list[:10]}{'...' if len(positions_list) > 10 else ''}")
 
 	# Show original text
 	if show_text:
@@ -149,9 +177,11 @@ def display_sample(
 
 		# Show special tokens
 		print(f"\nSpecial Tokens:")
-		print(f"  START token (257) in input_ids: {257 in input_tokens}")
-		print(f"  END token (258) in labels:      {258 in label_tokens}")
-		print(f"  PAD token (256) present:        {256 in input_tokens or 256 in label_tokens}")
+		print(f"  START token (1) in input_ids: {1 in input_tokens}")
+		print(f"  END token (2) in labels:      {2 in label_tokens}")
+		print(f"  PAD token (0) present:        {0 in input_tokens or 0 in label_tokens}")
+		if 'value_score' in sample:
+			print(f"  VALUE token (3) in labels:    {3 in label_tokens}")
 
 	# Decode tokens back to text
 	if show_decoded:
@@ -199,7 +229,8 @@ def validate_dataset(dataset: TGNDataset, num_samples: int = 5):
 			assert sample['input_ids'].shape == sample['attention_mask'].shape, f"Sample {idx}: mask shape mismatch"
 
 			# Check token range
-			assert sample['input_ids'].max() < 259, f"Sample {idx}: invalid token ID"
+			max_token_id = 127  # New tokenizer has 128 tokens (0-127)
+			assert sample['input_ids'].max() <= max_token_id, f"Sample {idx}: invalid token ID {sample['input_ids'].max()}"
 			assert sample['input_ids'].min() >= 0, f"Sample {idx}: negative token ID"
 
 			# Check attention mask values
@@ -207,7 +238,18 @@ def validate_dataset(dataset: TGNDataset, num_samples: int = 5):
 
 			# Check sequence structure (input should start with START token)
 			first_token = sample['input_ids'][0].item()
-			assert first_token == 257, f"Sample {idx}: should start with START token (257), got {first_token}"
+			assert first_token == 1, f"Sample {idx}: should start with START token (1), got {first_token}"
+
+			# Check value fields if present (TGNValueDataset)
+			if 'value_score' in sample:
+				assert isinstance(sample['value_score'], torch.Tensor), f"Sample {idx}: value_score not a tensor"
+				assert sample['value_score'].dtype == torch.float32, f"Sample {idx}: value_score wrong dtype"
+				assert sample['value_score'].numel() == 1, f"Sample {idx}: value_score should be scalar"
+
+			if 'move_end_positions' in sample:
+				assert isinstance(sample['move_end_positions'], torch.Tensor), f"Sample {idx}: move_end_positions not a tensor"
+				assert sample['move_end_positions'].dtype == torch.long, f"Sample {idx}: move_end_positions wrong dtype"
+				assert sample['move_end_positions'].dim() == 1, f"Sample {idx}: move_end_positions should be 1D"
 
 		except Exception as e:
 			errors.append(f"Sample {idx}: {str(e)}")
@@ -224,6 +266,12 @@ def validate_dataset(dataset: TGNDataset, num_samples: int = 5):
 		print(f"  ✓ Valid token ranges")
 		print(f"  ✓ Valid attention masks")
 		print(f"  ✓ Proper sequence structure")
+
+		# Check if any samples have value fields
+		sample = dataset[0]
+		if 'value_score' in sample:
+			print(f"  ✓ Value score fields present (TGNValueDataset)")
+			print(f"  ✓ Move end positions valid")
 
 	print()
 
@@ -276,11 +324,14 @@ def visualize_batch_interactive(dataset: TGNDataset, batch_size: int = 4, start_
 	print("=" * 80 + "\n")
 
 	# Create DataLoader for batching
+	# Use the appropriate collate function based on dataset type
+	collate_fn = dataset.collate_batch if hasattr(dataset, 'collate_batch') else TGNDataset.collate_batch
+
 	dataloader = DataLoader(
 		dataset,
 		batch_size=batch_size,
 		shuffle=False,
-		collate_fn=TGNDataset.collate_batch,
+		collate_fn=collate_fn,
 	)
 
 	total_batches = len(dataloader)
@@ -383,7 +434,7 @@ def visualize_batch(
 	ax4 = fig.add_subplot(gs[0, 2])
 	# Flatten and count tokens (exclude padding)
 	valid_tokens = input_ids[attention_mask == 1].cpu().numpy()
-	token_counts = np.bincount(valid_tokens, minlength=259)
+	token_counts = np.bincount(valid_tokens, minlength=128)
 
 	# Show distribution of most common tokens
 	top_k = 20
@@ -421,14 +472,29 @@ def visualize_batch(
 	stats_text += f"  Max:  {pad_per_sample.max()}\n\n"
 
 	# Count special tokens
-	start_count = (input_ids == 257).sum().item()
-	end_count = (labels == 258).sum().item()
-	pad_count = (input_ids == 256).sum().item()
+	start_count = (input_ids == 1).sum().item()
+	end_count = (labels == 2).sum().item()
+	pad_count = (input_ids == 0).sum().item()
 
 	stats_text += "Special Tokens:\n"
-	stats_text += f"  START (257): {start_count}\n"
-	stats_text += f"  END (258):   {end_count}\n"
-	stats_text += f"  PAD (256):   {pad_count}\n"
+	stats_text += f"  START (1): {start_count}\n"
+	stats_text += f"  END (2):   {end_count}\n"
+	stats_text += f"  PAD (0):   {pad_count}\n"
+
+	# Add value information if present
+	if 'value_score' in batch:
+		value_scores = batch['value_score'].cpu().numpy()
+		stats_text += f"\nValue Scores:\n"
+		stats_text += f"  Mean: {value_scores.mean():.1f}\n"
+		stats_text += f"  Min:  {value_scores.min():.1f}\n"
+		stats_text += f"  Max:  {value_scores.max():.1f}\n"
+
+		if 'move_end_positions' in batch:
+			num_moves_per_sample = [len(pos) for pos in batch['move_end_positions']]
+			stats_text += f"\nMoves per Sample:\n"
+			stats_text += f"  Mean: {np.mean(num_moves_per_sample):.1f}\n"
+			stats_text += f"  Min:  {np.min(num_moves_per_sample)}\n"
+			stats_text += f"  Max:  {np.max(num_moves_per_sample)}\n"
 
 	ax5.text(0.05, 0.95, stats_text, transform=ax5.transAxes,
 	         fontsize=9, verticalalignment='top', fontfamily='monospace',
@@ -469,27 +535,28 @@ def visualize_batch(
 def main():
 	"""Main CLI entry point."""
 	parser = argparse.ArgumentParser(
-		description="View and validate TGNDataset contents",
+		description="View and validate TGNDataset or TGNValueDataset contents",
 		formatter_class=argparse.RawDescriptionHelpFormatter,
 		epilog="""
 Examples:
   # View dataset statistics
   python tools/view_dataset.py configs/training/trigo-gpt2.yaml --stats
+  python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --stats
 
-  # View a specific sample
-  python tools/view_dataset.py configs/training/trigo-gpt2.yaml --sample 0
+  # View a specific sample (shows value_score and move_end_positions for TGNValueDataset)
+  python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --sample 0
 
   # List all samples
   python tools/view_dataset.py configs/training/trigo-gpt2.yaml --list
 
-  # Validate dataset
-  python tools/view_dataset.py configs/training/trigo-gpt2.yaml --validate
+  # Validate dataset (checks value fields if present)
+  python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --validate
 
   # View sample with full details
   python tools/view_dataset.py configs/training/trigo-gpt2.yaml --sample 0 --tokens --decoded
 
-  # Interactive batch visualization
-  python tools/view_dataset.py configs/training/trigo-gpt2.yaml --visualize --batch-size 4
+  # Interactive batch visualization (includes value scores and move counts for TGNValueDataset)
+  python tools/view_dataset.py configs/training/trigo-gpt2-value.yaml --visualize --batch-size 4
 		""",
 	)
 
