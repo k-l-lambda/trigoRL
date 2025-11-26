@@ -7501,4 +7501,283 @@ for i, pos in enumerate(batch['move_end_positions'][sample_idx]):
 </details>
 
 
+> Implement ValueHead module for game value prediction following AlphaGo Zero architecture adapted for transformers.
+
+<details>
+<summary>ValueHead module implementation with AlphaGo Zero-inspired architecture</summary>
+
+### Context
+
+After implementing TGNValueDataset which provides `value_score` and `move_end_positions` fields, we needed a standalone value head module to predict game outcomes from hidden states. The module follows AlphaGo Zero architecture principles adapted for transformer-based models.
+
+### Design Requirements
+
+User specified:
+1. **Standalone nn.Module** that accepts hidden states as input
+2. **AlphaGo Zero architecture** adapted for transformers
+3. **Return predictions only** (loss computed externally in trainer)
+4. **VALUE token extraction** handled elsewhere (not this module's concern)
+
+### AlphaGo Zero Architecture Adaptation
+
+**Original AlphaGo Zero (CNN-based):**
+- Conv(1×1, 1 filter) → BatchNorm → ReLU
+- FC layer → ReLU
+- FC layer → tanh
+
+**Transformer Adaptation:**
+```
+Layer 1: Linear(hidden_dim → intermediate_dim)
+         LayerNorm(intermediate_dim)
+         ReLU()
+         Dropout(p=dropout)
+
+Layer 2: Linear(intermediate_dim → bottleneck_dim)
+         LayerNorm(bottleneck_dim)
+         ReLU()
+         Dropout(p=dropout)
+
+Output:  Linear(bottleneck_dim → 1)
+         Tanh()
+```
+
+**Key Design Principles:**
+1. **Progressive bottleneck**: 256 → 256 → 64 → 1 (compression before prediction)
+2. **LayerNorm over BatchNorm**: Better for sequence models
+3. **ReLU activations**: Matches AlphaGo Zero hidden layers
+4. **tanh output**: Bounds predictions to [-1, 1] for win/loss interpretation
+5. **Dropout regularization**: Prevents overfitting
+
+### Implementation Details
+
+**Module Features:**
+
+1. **Shape Flexibility**: Automatically handles both 2D and 3D inputs
+   - 2D: `[batch_size, hidden_dim] → [batch_size]`
+   - 3D: `[batch_size, seq_len, hidden_dim] → [batch_size, seq_len]`
+
+2. **Configuration Support**: Full `from_config()` integration with OmegaConf
+   - Supports both dict and DictConfig inputs
+   - Sensible defaults for all hyperparameters
+
+3. **Utility Methods**:
+   - `get_model_info()`: Architecture information
+   - `count_parameters()`: Total and trainable parameters
+   - `__repr__()`: Readable string representation
+
+4. **Registry Integration**: Registered as `'ValueHead'` with `@register_model` decorator
+
+### Usage Examples
+
+**Standalone Usage:**
+```python
+from trigor.models import ValueHead
+
+# Create value head
+value_head = ValueHead(
+    hidden_dim=256,
+    intermediate_dim=256,
+    bottleneck_dim=64,
+    dropout=0.1,
+)
+
+# Forward pass with 2D input
+hidden_states = torch.randn(4, 256)  # [batch, hidden_dim]
+values = value_head(hidden_states)   # [batch] in [-1, 1]
+
+# Forward pass with 3D input
+hidden_states = torch.randn(4, 10, 256)  # [batch, seq_len, hidden_dim]
+values = value_head(hidden_states)       # [batch, seq_len] in [-1, 1]
+```
+
+**With CausalLM Model:**
+```python
+from trigor.models import GPT2CausalLM, ValueHead
+
+# Create base model
+model = GPT2CausalLM.from_config({
+    'vocab_size': 128,
+    'hidden_size': 256,
+    'num_layers': 6,
+})
+
+# Create value head (must match hidden_size)
+value_head = ValueHead(hidden_dim=256)
+
+# Training loop
+for batch in dataloader:
+    # Get hidden states from base model
+    outputs = model(input_ids, output_hidden_states=True)
+    hidden_states = outputs.hidden_states[-1]
+
+    # Extract hidden states at move-ending positions
+    value_hidden = extract_value_hidden_states(hidden_states, move_end_positions)
+
+    # Predict values
+    value_predictions = value_head(value_hidden)
+
+    # Compute loss (external to ValueHead)
+    value_loss = F.mse_loss(value_predictions, value_targets)
+```
+
+**From Configuration:**
+```python
+from trigor.models import make_model
+
+config = {
+    'hidden_dim': 512,
+    'intermediate_dim': 256,
+    'bottleneck_dim': 64,
+    'dropout': 0.2,
+}
+
+value_head = make_model('ValueHead', config)
+```
+
+### Testing
+
+**Test Coverage** (25 tests, all passing):
+
+1. **Forward pass tests** (5 tests):
+   - 2D input: `[batch, hidden_dim] → [batch]`
+   - 3D input: `[batch, seq_len, hidden_dim] → [batch, seq_len]`
+   - Output range verification (bounded to [-1, 1])
+   - Large batch and single sample tests
+
+2. **Configuration tests** (5 tests):
+   - `from_config()` with dict and OmegaConf
+   - Default parameter values
+   - LayerNorm optional
+   - Activation function options
+
+3. **Utility tests** (3 tests):
+   - Parameter counting accuracy
+   - Model info completeness
+   - String representation
+
+4. **Gradient tests** (2 tests):
+   - Gradient flow verification
+   - Gradient magnitude sanity checks
+
+5. **Registry tests** (2 tests):
+   - Model registry integration
+   - List models functionality
+
+6. **Integration tests** (2 tests):
+   - With GPT2CausalLM hidden states
+   - Different dtypes (fp32, fp16)
+
+7. **Edge case tests** (4 tests):
+   - Zero batch size
+   - Long sequences (1000 tokens)
+   - Minimal configuration
+   - Large hidden dimensions (2048)
+
+8. **Consistency tests** (2 tests):
+   - Deterministic forward pass
+   - Evaluation mode (dropout disabled)
+
+**Test Results:**
+```bash
+$ pytest tests/test_value_head.py -v
+============================= 25 passed in 4.98s =============================
+```
+
+### Files Created
+
+1. **`/home/camus/work/trigoRL/trigor/models/valueHead.py`** (291 lines)
+   - Core ValueHead implementation
+   - AlphaGo Zero-inspired architecture
+   - 2D/3D input handling with automatic shape detection
+   - Configuration-based initialization
+   - Registry integration
+
+2. **`/home/camus/work/trigoRL/tests/test_value_head.py`** (377 lines)
+   - Comprehensive unit tests (25 tests)
+   - Forward pass, configuration, utilities
+   - Gradients, registry, integration
+   - Edge cases and consistency
+
+### Files Modified
+
+3. **`/home/camus/work/trigoRL/trigor/models/__init__.py`**
+   - Added `from trigor.models.valueHead import ValueHead`
+   - Added `"ValueHead"` to `__all__` list
+
+### Key Design Decisions
+
+1. **Standalone Module**: Not a wrapper - accepts hidden states directly for maximum flexibility
+   - Works with any CausalLM model
+   - Easy to test in isolation
+   - Can be composed into larger architectures
+
+2. **AlphaGo Zero Architecture**: Progressive bottleneck (256→256→64→1)
+   - Proven effective for game value prediction
+   - Prevents overfitting through compression
+   - Simple but powerful design
+
+3. **Shape Flexibility**: Handles both 2D and 3D inputs automatically
+   - Detects input shape
+   - Flattens 3D to 2D for processing
+   - Restores original shape for output
+
+4. **Output Range**: tanh activation bounds predictions to [-1, 1]
+   - Natural mapping to win/loss probabilities
+   - -1 = certain loss, +1 = certain win, 0 = even
+
+5. **Loss Separation**: Module returns predictions only
+   - Loss computation handled externally in trainer
+   - More flexible loss strategies
+   - Easier to debug and test
+
+6. **LayerNorm over BatchNorm**: Better for sequence models
+   - Works well with variable sequence lengths
+   - Standard in modern transformer architectures
+
+### Parameter Count
+
+Default configuration (hidden_dim=256, intermediate_dim=256, bottleneck_dim=64):
+- **Total parameters**: ~83,000
+- **Breakdown**:
+  - Layer 1: 256×256 + 256 = 65,792
+  - LayerNorm 1: 256×2 = 512
+  - Layer 2: 256×64 + 64 = 16,448
+  - LayerNorm 2: 64×2 = 128
+  - Output: 64×1 + 1 = 65
+  - Total: ~83K parameters
+
+### Integration Roadmap
+
+**Current State:**
+- TGNValueDataset provides `value_score` and `move_end_positions`
+- CausalLM models output hidden states
+- **ValueHead module** now available as standalone component
+
+**Completed:**
+- ✅ Standalone value head with AlphaGo Zero architecture
+- ✅ 2D/3D input handling
+- ✅ Configuration support
+- ✅ Registry integration
+- ✅ Comprehensive test suite (25 tests passing)
+
+**Future Work (Not in Scope):**
+1. Helper function to extract VALUE token hidden states
+2. Dual-head wrapper combining policy + value
+3. Trainer extension for value loss training
+4. End-to-end training pipeline
+
+### Why AlphaGo Zero Architecture?
+
+The design is directly inspired by AlphaGo Zero's value head, which has proven highly effective for game outcome prediction:
+
+1. **Progressive dimensionality reduction**: Forces the network to learn compressed representations
+2. **tanh output activation**: Naturally maps to win probability in [-1, 1] range
+3. **Simple but powerful**: Fewer parameters reduce overfitting, critical for game domains
+4. **Proven track record**: Successfully used in AlphaGo, AlphaZero, MuZero
+
+By adapting this architecture for transformers (replacing Conv+BatchNorm with Linear+LayerNorm), we maintain the core principles while making it suitable for sequence models.
+
+</details>
+
+
 
