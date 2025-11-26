@@ -245,7 +245,7 @@ class TGNDataset(Dataset):
 		labels = tokens[1:]
 
 		# Create attention mask (1 for real tokens, 0 for padding)
-		attention_mask = (tokens != self.tokenizer.PAD_TOKEN_ID).long()
+		attention_mask = (tokens != self.tokenizer.PAD_ID).long()
 		attention_mask = attention_mask[:-1]  # Align with input_ids
 
 		return {

@@ -7035,3 +7035,199 @@ The tokenizer is now minimal, clean, and ready for dual-head network training.
 </details>
 
 
+## 2025/11/26
+
+
+> Implement TGNValueDataset loader to extract game value scores from TGN files for dual-head network training.
+
+<details>
+<summary>TGNValueDataset implementation with value score extraction</summary>
+
+Created a new dataset loader class that parses TGN game files to extract move sequences and final value scores for training dual-head networks (policy + value heads).
+
+**Requirements**:
+- Parse TGN file structure to extract moves and final score
+- Score interpretation: minus = Black win, plus = White win (preserve points value)
+- Add `value_score` and `num_moves` fields to dataset output
+- Model class will handle VALUE token injection and attention mask construction
+
+**Implementation** (`trigor/data/tgn_value_dataset.py`):
+
+1. **TGN Parsing Function**:
+```python
+def parse_tgn_file(text: str) -> Tuple[List[str], float, int]:
+    """
+    Parse TGN file to extract moves and score.
+
+    TGN Format:
+        [Board 2x3x3]
+
+        1. z00 zaa
+        2. aaz aaa
+        3. zza az0
+        ; -18
+
+    Returns:
+        (moves, score, num_moves)
+    """
+    move_pattern = re.compile(r'^\d+\.\s+(.+)$')
+    score_pattern = re.compile(r'^;\s*([+-]?\d+(?:\.\d+)?)$')
+
+    moves = []
+    score = 0.0
+
+    for line in text.strip().split('\n'):
+        line = line.strip()
+
+        # Match move lines like "1. z00 zaa"
+        move_match = move_pattern.match(line)
+        if move_match:
+            moves.append(move_match.group(1))
+            continue
+
+        # Match score comment like "; -18"
+        score_match = score_pattern.match(line)
+        if score_match:
+            score = float(score_match.group(1))
+
+    return moves, score, len(moves)
+```
+
+2. **TGNValueDataset Class**:
+```python
+@register_dataset('TGNValueDataset')
+class TGNValueDataset(TGNDataset):
+    """
+    Extends TGNDataset to add value score extraction.
+
+    Output format:
+        {
+            'input_ids': torch.Tensor,      # [max_length-1]
+            'labels': torch.Tensor,          # [max_length-1]
+            'attention_mask': torch.Tensor,  # [max_length-1]
+            'value_score': torch.Tensor,     # scalar float32
+            'num_moves': torch.Tensor,       # scalar int64
+        }
+    """
+
+    def __init__(self, ..., parse_value: bool = True):
+        super().__init__(...)
+        self.parse_value = parse_value
+
+    def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
+        # Get standard output from parent class
+        base_output = super().__getitem__(idx)
+
+        # Parse TGN for value score if enabled
+        if self.parse_value:
+            file_path = self.files[idx]
+            text = file_path.read_text(encoding='utf-8', errors='replace')
+
+            try:
+                moves, score, num_moves = parse_tgn_file(text)
+                base_output['value_score'] = torch.tensor(score, dtype=torch.float32)
+                base_output['num_moves'] = torch.tensor(num_moves, dtype=torch.long)
+            except Exception as e:
+                # Fallback for malformed files
+                base_output['value_score'] = torch.tensor(0.0, dtype=torch.float32)
+                base_output['num_moves'] = torch.tensor(0, dtype=torch.long)
+
+        return base_output
+
+    @staticmethod
+    def collate_batch(batch: List[Dict]) -> Dict[str, torch.Tensor]:
+        # Use parent collate for standard fields
+        collated = TGNDataset.collate_batch(batch)
+
+        # Stack new fields
+        if 'value_score' in batch[0]:
+            collated['value_score'] = torch.stack([x['value_score'] for x in batch])
+        if 'num_moves' in batch[0]:
+            collated['num_moves'] = torch.stack([x['num_moves'] for x in batch])
+
+        return collated
+```
+
+**Key Design Decisions**:
+
+1. **Inheritance over Composition**: Inherit from `TGNDataset` to reuse 80% of logic (file discovery, splitting, tokenization)
+
+2. **Simple Output Format**: Add only 2 new fields to existing output - no VALUE token injection in dataset
+
+3. **Error Handling**: Use try-except with fallback to 0.0 score for malformed files
+
+4. **Model Separation**: Dataset provides raw score; model handles VALUE token injection and mask construction
+
+5. **Backward Compatibility**: New dataset doesn't affect existing `TGNDataset` usage
+
+**Testing** (`tests/test_tgn_value_dataset.py`):
+
+Created comprehensive test suite with 17 tests covering:
+- TGN parsing (8 tests): basic parsing, positive/negative scores, missing score, empty files, etc.
+- Dataset functionality (6 tests): output fields, value extraction, tensor types, malformed files, etc.
+- Collate function (1 test): batch stacking verification
+- Integration (2 tests): DataLoader integration, from_config classmethod
+
+All tests pass ✓ (17/17)
+
+**Testing with Real Data**:
+```bash
+$ python -c "from trigor.data.tgn_value_dataset import TGNValueDataset; ..."
+Loaded 93 TGN files from .../selfplay
+Sample keys: ['input_ids', 'labels', 'attention_mask', 'value_score', 'num_moves']
+Value score: 4.0
+Num moves: 8
+```
+
+**Configuration Files**:
+
+1. **Dataset config** (`configs/dataset/tgn_value.yaml`):
+```yaml
+type: TGNValueDataset
+data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output/selfplay
+max_length: 8192
+parse_value: true
+```
+
+2. **Training config** (`configs/training/trigo-gpt2-value.yaml`):
+```yaml
+data:
+  type: TGNValueDataset  # Changed from TGNDataset
+  data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output/selfplay
+  parse_value: true  # Enable value score parsing
+```
+
+**Bug Fix in Base Class**:
+
+Fixed attribute error in `TGNDataset.__getitem__()`:
+```python
+# Before (incorrect):
+attention_mask = (tokens != self.tokenizer.PAD_TOKEN_ID).long()
+
+# After (correct):
+attention_mask = (tokens != self.tokenizer.PAD_ID).long()
+```
+
+**Files Created**:
+- `/home/camus/work/trigoRL/trigor/data/tgn_value_dataset.py` (219 lines)
+- `/home/camus/work/trigoRL/tests/test_tgn_value_dataset.py` (343 lines)
+- `/home/camus/work/trigoRL/configs/dataset/tgn_value.yaml`
+- `/home/camus/work/trigoRL/configs/training/trigo-gpt2-value.yaml`
+
+**Files Modified**:
+- `/home/camus/work/trigoRL/trigor/data/tgn_dataset.py` (fixed PAD_TOKEN_ID → PAD_ID)
+
+**Next Steps**:
+
+The dataset is ready for use. Model implementation will need to:
+1. Inject N VALUE tokens at appropriate positions based on `num_moves`
+2. Construct 2D attention masks where VALUE[i] sees moves 1..i
+3. Extract hidden states at VALUE token positions
+4. Compute value loss using MSE against `value_score` from batch
+
+This clean separation of concerns makes both dataset and model easier to implement and test.
+
+</details>
+
+
+
