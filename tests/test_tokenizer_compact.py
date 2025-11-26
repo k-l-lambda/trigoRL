@@ -173,22 +173,27 @@ class TestASCIIMapping:
 		self.tokenizer = TGNTokenizer()
 
 	def test_ascii_printable_range(self):
-		"""Test all ASCII printable characters can be encoded."""
-		# ASCII 32-126 (space to ~)
-		ascii_chars = ''.join(chr(i) for i in range(32, 127))
+		"""Test ASCII printable characters (32-127) use direct identity mapping."""
+		# Test a few representative ASCII characters with identity mapping
+		test_cases = [
+			(' ', 32),   # SPACE
+			('0', 48),   # Digit
+			('A', 65),   # Uppercase
+			('a', 97),   # Lowercase
+			('~', 126),  # Last printable before DEL
+		]
 
-		tokens = self.tokenizer.encode(
-			ascii_chars,
-			add_special_tokens=False,
-			padding=False
-		)
-
-		# All should be in range 8-127
-		assert (tokens >= 8).all()
-		assert (tokens < 128).all()
+		for char, expected_token in test_cases:
+			tokens = self.tokenizer.encode(
+				char,
+				add_special_tokens=False,
+				padding=False
+			)
+			# Direct identity mapping: token_id = ascii_value
+			assert tokens[0] == expected_token == ord(char)
 
 	def test_space_character(self):
-		"""Test space character (ASCII 32) maps to token 10."""
+		"""Test space character (ASCII 32) maps to token 32 (identity mapping)."""
 		text = " "
 		tokens = self.tokenizer.encode(
 			text,
@@ -196,8 +201,8 @@ class TestASCIIMapping:
 			padding=False
 		)
 
-		# Space (ASCII 32) should map to token 10
-		assert tokens[0] == 10
+		# Direct identity mapping: token 32 = ASCII 32
+		assert tokens[0] == 32
 
 	def test_tgn_common_characters(self):
 		"""Test TGN common characters are all encodable."""

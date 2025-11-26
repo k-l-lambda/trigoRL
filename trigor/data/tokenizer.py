@@ -1,15 +1,17 @@
 """
 Optimized tokenizer for TGN (Trigo Game Notation) files.
 
-This tokenizer uses a reduced vocabulary of 128 tokens:
-- 0-3: Special tokens (PAD, START, END, VALUE) - 4-7 reserved for future use
-- 8-127: ASCII printable characters + essential whitespace
+This tokenizer uses a vocabulary of 128 tokens with direct ASCII mapping:
+- 0-3: Special tokens (PAD, START, END, VALUE)
+- 4-7: Reserved for future use
+- 10: Newline (LF)
+- 32-127: ASCII printable characters (direct identity mapping)
 
-The reduced vocabulary is designed for:
-1. Memory efficiency: Smaller embedding layer (128 vs 259)
-2. Training speed: Fewer parameters to learn
-3. TGN compatibility: ASCII-based notation fits in token range 10-104
-4. Value head support: VALUE token for position evaluation
+The design principles:
+1. Memory efficiency: Reduced vocabulary (128 vs 259)
+2. Simplicity: Token ID = ASCII value (no complex mapping)
+3. TGN compatibility: All ASCII characters directly accessible
+4. Value head support: VALUE token for dual-head networks
 """
 
 from typing import List, Union
@@ -22,28 +24,27 @@ class TGNTokenizer:
 	Compact tokenizer for TGN notation with 128-token vocabulary.
 
 	Vocabulary Layout (128 tokens total):
-	    0-7:    Special tokens
+	    0-3:    Special tokens
 	            0: PAD    - Padding token
 	            1: START  - Beginning of sequence
 	            2: END    - End of sequence
 	            3: VALUE  - Value evaluation marker (for dual-head network)
-	            4-7: unused
+	            4-7: reserved for future use
 
-	    8-10:   Essential whitespace
-	            8  -> 9   (TAB)
-	            9  -> 10  (LF/newline)
-	            10 -> 32  (SPACE)
+	    10:     LF (newline) for multi-line game records
 
-	    11-104: ASCII printable (33-126: ! to ~)
-	            11 -> 33  (!)
-	            12 -> 34  (")
-	            ...
-	            104 -> 126 (~)
+	    32-127: ASCII printable characters (direct identity mapping)
+	            32: SPACE
+	            33-47: Punctuation (!, ", #, ..., /)
+	            48-57: Digits (0-9)
+	            58-64: Punctuation (:, ;, <, =, >, ?, @)
+	            65-90: Uppercase letters (A-Z)
+	            91-96: Punctuation ([, \\, ], ^, _, `)
+	            97-122: Lowercase letters (a-z)
+	            123-127: Punctuation ({, |, }, ~, DEL)
 
-	    127:    DEL character (127)
-
-	This design allows TGN notation (using A-Z, a-z, 0-9, space, punctuation)
-	and multi-line game records to be fully represented while keeping vocabulary minimal.
+	This design uses direct identity mapping: token_id = ascii_value
+	No complex formulas needed - simple and efficient.
 	"""
 
 	# Vocabulary size
@@ -55,11 +56,6 @@ class TGNTokenizer:
 	END_ID = 2
 	VALUE_ID = 3  # For value evaluation in dual-head networks
 
-	# Whitespace token mapping (tokens 8-10)
-	# TAB(9) -> 8, LF(10) -> 9, SPACE(32) -> 10
-	# ASCII printable (33-126) -> tokens 11-104
-	# DEL(127) -> 127
-
 	def __init__(self):
 		"""Initialize the compact tokenizer."""
 		# Create byte-to-token mapping
@@ -67,21 +63,15 @@ class TGNTokenizer:
 
 	def _build_vocab_map(self):
 		"""Build bidirectional mapping between bytes and token IDs."""
-		# Byte -> Token ID mapping
 		self.byte_to_token = {}
 
-		# Essential whitespace characters (use tokens 8-10)
-		self.byte_to_token[9] = 8   # TAB -> token 8
-		self.byte_to_token[10] = 9  # LF (newline) -> token 9
-		self.byte_to_token[32] = 10 # SPACE -> token 10
+		# Direct identity mapping: token_id = ascii_value
+		# ASCII printable: 32 (SPACE) to 127 (DEL)
+		for ascii_val in range(32, 128):
+			self.byte_to_token[ascii_val] = ascii_val
 
-		# ASCII printable range (33-126: ! to ~)
-		for ascii_val in range(33, 127):  # 33-126 (! to ~)
-			token_id = ascii_val - 33 + 11  # Start from token 11
-			self.byte_to_token[ascii_val] = token_id
-
-		# DEL character (127) -> token 127
-		self.byte_to_token[127] = 127
+		# Newline for multi-line TGN files
+		self.byte_to_token[10] = 10  # LF
 
 		# Token ID -> Byte mapping (inverse)
 		self.token_to_byte = {v: k for k, v in self.byte_to_token.items()}
