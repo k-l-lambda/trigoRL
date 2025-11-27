@@ -42,20 +42,20 @@ model:
       type: GPT2CausalLM
       config:
         vocab_size: 128  # TGN compact tokenizer (reduced from 259)
-        hidden_size: 256
+        hidden_size: 64
         num_layers: 6
         num_heads: 8
         max_seq_len: 8192
         dropout: 0.1
         activation: gelu_new
-        intermediate_size: 1024  # FFN inner dimension (4 * hidden_size)
+        intermediate_size: 256  # FFN inner dimension (4 * hidden_size)
         layer_norm_eps: 1e-5
         use_cache: true
 
     # Value head configuration
     value_head_config:
-      hidden_dim: 256  # Must match base model hidden_size
-      intermediate_dim: 512  # FFN hidden dimension
+      hidden_dim: 64  # Must match base model hidden_size
+      intermediate_dim: 128  # FFN hidden dimension
       bottleneck_dim: 64  # Bottleneck dimension for value prediction
       dropout: 0.1
 
@@ -92,7 +92,7 @@ training:
   scheduler:
     type: inverse_sqrt
     d_model: 256      # Should match model hidden_size
-    lr_mul: 1.0       # Learning rate multiplier
+    lr_mul: 2000.0       # Learning rate multiplier
 
   # Checkpointing
   save_frequency: 1  # Save every N validations (not epochs)
@@ -105,7 +105,7 @@ training:
     mode: min  # 'min' for loss, 'max' for accuracy
 
   # Logging
-  log_frequency: 16  # Log every N examples (not steps)
+  log_frequency: 160  # Log every N examples (not steps)
   wandb:
     enabled: true
     # project is trigor by default
@@ -122,7 +122,7 @@ training:
 
 # Evaluation configuration
 eval:
-  eval_frequency: 2  # Evaluate every N epochs
+  eval_frequency: 1  # Evaluate every N epochs
   eval_batches: 50
 
 # Device and reproducibility
