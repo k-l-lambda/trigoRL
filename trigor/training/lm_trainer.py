@@ -423,13 +423,13 @@ class LMTrainer:
 		self.optimizer.zero_grad()
 
 		for batch_idx, batch in enumerate(pbar):
-			# Move batch to device
-			input_ids = batch['input_ids'].to(self.config.device)
-			labels = batch['labels'].to(self.config.device)
-			attention_mask = batch['attention_mask'].to(self.config.device)
+			# Move batch to device (in-place to reduce memory)
+			for key in batch:
+				if isinstance(batch[key], torch.Tensor):
+					batch[key] = batch[key].to(self.config.device)
 
-			# Forward pass
-			outputs = self.model(input_ids, labels, attention_mask)
+			# Forward pass (pass entire batch dict)
+			outputs = self.model(batch)
 
 			# Scale loss for gradient accumulation
 			loss = outputs['loss'] / self.config.training.gradient_accumulation_steps
@@ -472,7 +472,7 @@ class LMTrainer:
 
 				# Increment global step and examples
 				self.global_step += 1
-				current_batch_size = input_ids.size(0)
+				current_batch_size = batch['input_ids'].size(0)
 				self.global_examples += current_batch_size
 
 				# Log to wandb (based on examples processed)
@@ -523,13 +523,13 @@ class LMTrainer:
 				if max_batches and batch_idx >= max_batches:
 					break
 
-				# Move batch to device
-				input_ids = batch['input_ids'].to(self.config.device)
-				labels = batch['labels'].to(self.config.device)
-				attention_mask = batch['attention_mask'].to(self.config.device)
+				# Move batch to device (in-place to reduce memory)
+				for key in batch:
+					if isinstance(batch[key], torch.Tensor):
+						batch[key] = batch[key].to(self.config.device)
 
-				# Forward pass
-				outputs = self.model(input_ids, labels, attention_mask)
+				# Forward pass (pass entire batch dict)
+				outputs = self.model(batch)
 
 				# Accumulate metrics
 				total_loss += outputs['loss'].item()

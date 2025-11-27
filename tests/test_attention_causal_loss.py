@@ -100,19 +100,24 @@ def test_forward_pass():
 
 	# Forward pass
 	with torch.no_grad():
-		outputs = loss_module(input_ids, labels, attention_mask, return_logits=True)
+		batch = {
+			'input_ids': input_ids,
+			'labels': labels,
+			'attention_mask': attention_mask,
+		}
+		outputs = loss_module(batch, return_logits=True)
 
 	print("Forward pass outputs:")
 	print(f"  Loss: {outputs['loss'].item():.4f}")
-	print(f"  Accuracy: {outputs['accuracy'].item():.4f}")
-	print(f"  Top-5 Accuracy: {outputs['top5_accuracy'].item():.4f}")
+	print(f"  Error: {outputs['error'].item():.4f}")
+	print(f"  Top-5 Error: {outputs['top5_error'].item():.4f}")
 	print(f"  Perplexity: {outputs['perplexity'].item():.2f}")
 	print(f"  Num valid tokens: {outputs['num_tokens'].item()}")
 	print(f"  Logits shape: {outputs['logits'].shape}\n")
 
 	# Verify metrics are in valid range
-	assert 0 <= outputs['accuracy'].item() <= 1, "Accuracy out of range"
-	assert 0 <= outputs['top5_accuracy'].item() <= 1, "Top-5 accuracy out of range"
+	assert 0 <= outputs['error'].item() <= 1, "Error out of range"
+	assert 0 <= outputs['top5_error'].item() <= 1, "Top-5 error out of range"
 	assert outputs['perplexity'].item() > 0, "Perplexity should be positive"
 	assert outputs['logits'].shape == (batch_size, seq_len, 259), "Logits shape mismatch"
 
@@ -169,11 +174,16 @@ def test_different_model_architectures():
 		loss_module.eval()
 
 		with torch.no_grad():
-			outputs = loss_module(input_ids, labels, attention_mask)
+			batch = {
+				'input_ids': input_ids,
+				'labels': labels,
+				'attention_mask': attention_mask,
+			}
+			outputs = loss_module(batch)
 
 		print(f"  ✓ Forward pass successful")
 		print(f"    Loss: {outputs['loss'].item():.4f}")
-		print(f"    Accuracy: {outputs['accuracy'].item():.4f}\n")
+		print(f"    Error: {outputs['error'].item():.4f}\n")
 
 	print("✓ All architectures tested successfully!\n")
 
@@ -210,14 +220,19 @@ def test_label_smoothing():
 		loss_module.eval()
 
 		with torch.no_grad():
-			outputs = loss_module(input_ids, labels, attention_mask)
+			batch = {
+				'input_ids': input_ids,
+				'labels': labels,
+				'attention_mask': attention_mask,
+			}
+			outputs = loss_module(batch)
 
 		loss_value = outputs['loss'].item()
 		losses.append(loss_value)
 
 		print(f"Label smoothing = {smoothing:.1f}:")
 		print(f"  Loss: {loss_value:.4f}")
-		print(f"  Accuracy: {outputs['accuracy'].item():.4f}\n")
+		print(f"  Error: {outputs['error'].item():.4f}\n")
 
 	print(f"✓ Label smoothing tested (losses: {[f'{l:.4f}' for l in losses]})\n")
 
@@ -300,11 +315,15 @@ def test_with_omegaconf():
 	labels = torch.randint(0, 259, (2, 32))
 
 	with torch.no_grad():
-		outputs = loss_module(input_ids, labels)
+		batch = {
+			'input_ids': input_ids,
+			'labels': labels,
+		}
+		outputs = loss_module(batch)
 
 	print(f"Forward pass successful:")
 	print(f"  Loss: {outputs['loss'].item():.4f}")
-	print(f"  Accuracy: {outputs['accuracy'].item():.4f}\n")
+	print(f"  Error: {outputs['error'].item():.4f}\n")
 
 	print("✓ OmegaConf integration test passed!\n")
 

@@ -159,37 +159,60 @@ class AttentionCausalLoss(nn.Module):
 
 	def forward(
 		self,
-		input_ids: torch.Tensor,
-		labels: torch.Tensor,
-		attention_mask: Optional[torch.Tensor] = None,
+		batch: Optional[Dict[str, torch.Tensor]] = None,
 		return_logits: bool = False,
+		**kwargs
 	) -> Dict[str, torch.Tensor]:
 		"""
 		Forward pass: compute loss and metrics.
 
 		Args:
-		    input_ids: Input token IDs [batch_size, seq_len]
-		    labels: Target token IDs [batch_size, seq_len]
-		    attention_mask: Attention mask [batch_size, seq_len] (optional)
+		    batch: Dictionary containing:
+		        - input_ids: Input token IDs [batch_size, seq_len]
+		        - labels: Target token IDs [batch_size, seq_len]
+		        - attention_mask: Attention mask [batch_size, seq_len] (optional)
 		    return_logits: Whether to return model logits (default: False)
+		    **kwargs: Alternative way to pass input_ids, labels, attention_mask
+		              (for backward compatibility)
 
 		Returns:
 		    Dictionary containing:
 		        - loss: Cross-entropy loss (scalar)
-		        - accuracy: Token-level accuracy (scalar)
+		        - error: Token-level error rate (scalar)
 		        - perplexity: Perplexity metric (scalar)
-		        - top5_accuracy: Top-5 token accuracy (scalar)
+		        - top5_error: Top-5 token error rate (scalar)
 		        - num_tokens: Number of valid tokens (scalar)
 		        - logits: Model output logits [batch_size, seq_len, vocab_size] (if return_logits=True)
 
 		Example:
-		    >>> input_ids = torch.randint(0, 259, (4, 512))
-		    >>> labels = torch.randint(0, 259, (4, 512))
-		    >>> attention_mask = torch.ones(4, 512)
-		    >>> outputs = loss_module(input_ids, labels, attention_mask)
+		    >>> # New API (preferred)
+		    >>> batch = {
+		    ...     'input_ids': torch.randint(0, 259, (4, 512)),
+		    ...     'labels': torch.randint(0, 259, (4, 512)),
+		    ...     'attention_mask': torch.ones(4, 512),
+		    ... }
+		    >>> outputs = loss_module(batch)
 		    >>> loss = outputs['loss']
-		    >>> accuracy = outputs['accuracy']
+		    >>> error = outputs['error']
+
+		    >>> # Old API (backward compatible)
+		    >>> outputs = loss_module(input_ids=input_ids, labels=labels, attention_mask=attention_mask)
 		"""
+		# Handle both batch dict and individual arguments (backward compatibility)
+		if batch is None:
+			# Use kwargs (backward compatibility)
+			input_ids = kwargs.get('input_ids')
+			labels = kwargs.get('labels')
+			attention_mask = kwargs.get('attention_mask')
+
+			if input_ids is None or labels is None:
+				raise ValueError("Either 'batch' dict or 'input_ids' and 'labels' must be provided")
+		else:
+			# Use batch dict
+			input_ids = batch['input_ids']
+			labels = batch['labels']
+			attention_mask = batch.get('attention_mask')
+
 		# Get model predictions
 		model_outputs = self.model(input_ids, attention_mask=attention_mask)
 		logits = model_outputs.logits  # [batch_size, seq_len, vocab_size]
