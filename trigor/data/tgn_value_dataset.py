@@ -159,6 +159,59 @@ class TGNValueDataset(TGNDataset):
 	    >>> print(sample['move_end_positions'])  # Token positions where moves end
 	"""
 
+	@classmethod
+	def from_config(cls, config: Dict) -> 'TGNValueDataset':
+		"""
+		Create TGNValueDataset from configuration dictionary.
+
+		Extends parent's from_config to support parse_value parameter.
+
+		Args:
+		    config: Configuration dictionary with keys from TGNDataset.from_config
+		            plus optional:
+		        - parse_value: Enable value parsing (default: True)
+
+		Returns:
+		    Instantiated TGNValueDataset
+
+		Example:
+		    >>> config = {
+		    ...     'data_dir': 'data/selfplay',
+		    ...     'max_length': 2048,
+		    ...     'split': '*0..7/10',
+		    ...     'parse_value': True,
+		    ... }
+		    >>> dataset = TGNValueDataset.from_config(config)
+		"""
+		# Call parent's from_config to get base parameters
+		# But we need to instantiate using cls (TGNValueDataset) not parent class
+		from omegaconf import OmegaConf
+
+		# Convert plain dict to DictConfig for unified API
+		if isinstance(config, dict):
+			config = OmegaConf.create(config)
+
+		# Create tokenizer
+		tokenizer_config = config.get('tokenizer_config', {})
+		tokenizer = TGNByteTokenizer(**tokenizer_config)
+
+		# Extract dataset parameters
+		dataset_params = {
+			'data_dir': config.data_dir,
+			'tokenizer': tokenizer,
+			'max_length': config.get('max_length', 2048),
+			'min_length': config.get('min_length', 10),
+			'max_file_size': config.get('max_file_size', 10000),
+			'split': config.get('split', None),
+			'parse_value': config.get('parse_value', True),  # TGNValueDataset-specific
+		}
+
+		# Optional filter function
+		if 'filter_fn' in config:
+			dataset_params['filter_fn'] = config.filter_fn
+
+		return cls(**dataset_params)
+
 	def __init__(
 		self,
 		data_dir: str,
