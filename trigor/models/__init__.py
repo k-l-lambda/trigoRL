@@ -13,6 +13,7 @@ from trigor.models.xlstmCausalLM import xLSTMCausalLM
 
 # Loss modules
 from trigor.models.attentionCausalLoss import AttentionCausalLoss
+from trigor.models.valueCausalLoss import ValueCausalLoss
 
 # Evaluation mode for ONNX export
 from trigor.models.evaluationCausalLM import (
@@ -37,6 +38,7 @@ __all__ = [
 	"xLSTMCausalLM",
 	# Loss modules
 	"AttentionCausalLoss",
+	"ValueCausalLoss",
 	# Evaluation mode
 	"EvaluationCausalLM",
 	"create_causal_evaluated_mask",
