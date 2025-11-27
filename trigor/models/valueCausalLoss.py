@@ -204,93 +204,106 @@ class ValueCausalLoss(nn.Module):
 	def _inject_value_tokens(
 		self,
 		input_ids: torch.Tensor,  # [batch, seq_len]
+		labels: torch.Tensor,  # [batch, seq_len]
 		move_end_positions: List[torch.Tensor],  # Variable length per sample
-	) -> torch.Tensor:
+	) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""
-		Append VALUE tokens to sequence tail.
+		Append VALUE tokens to input sequence, clipping VALUE tokens if necessary.
 
-		Injects VALUE tokens at the end of each sequence. The number of VALUE tokens
+		Injects VALUE tokens at the end of each input sequence. The number of VALUE tokens
 		equals the number of moves in the game. The i-th VALUE token corresponds to
 		the i-th move and will be used to predict the game value from that position.
 
+		If the sequence + VALUE tokens would exceed max_position_embeddings, only partial
+		VALUE tokens are added to stay within the limit. The input_ids and labels are kept
+		intact to preserve policy learning quality. This means some value predictions may
+		be missing, but policy learning is unaffected.
+
+		Labels are padded (not injected) with ignore_index at VALUE/PAD positions.
+
 		Args:
 		    input_ids: Input token IDs [batch, seq_len]
+		    labels: Target token IDs [batch, seq_len]
 		    move_end_positions: List of tensors, each containing move end positions
 
 		Returns:
-		    [batch, new_seq_len] with VALUE tokens appended
+		    Tuple of:
+		    - input_ids with VALUE tokens appended [batch, new_seq_len]
+		    - labels padded with ignore_index [batch, new_seq_len]
 
 		Example:
-		    Input:  [START, move1, move2, END, PAD, PAD]
-		    Moves:  3 moves in game
-		    Output: [START, move1, move2, END, VALUE, VALUE, VALUE]
+		    Input:  input_ids=[START, move1, move2, PAD, PAD, PAD]
+		            labels=[move1, move2, END, PAD, PAD, PAD]
+		            moves=3
+		    Output: input_ids=[START, move1, move2, VALUE, VALUE, VALUE]
+		            labels=[move1, move2, END, IGNORE, IGNORE, IGNORE]
+
+		Example (clipping):
+		    Input:  input_ids=[START, ...tokens..., move_n] (length 8191)
+		            labels=[...tokens..., move_n, END] (length 8191)
+		            moves=15, max_seq_len=8192
+		    Output: input_ids=[START, ...tokens..., move_n, VALUE] (length 8192, only 1 VALUE added)
+		            labels=[...tokens..., move_n, END, IGNORE] (length 8192, complete)
 		"""
 		batch_size = input_ids.shape[0]
 		device = input_ids.device
-		new_sequences = []
+
+		# Get max sequence length from model config
+		max_seq_len = self.model.config.max_position_embeddings
+
+		new_input_sequences = []
+		new_label_sequences = []
 
 		for i in range(batch_size):
 			seq = input_ids[i]
+			label_seq = labels[i]
 			num_moves = len(move_end_positions[i])
 
-			# Append num_moves VALUE tokens
-			value_tokens = torch.full(
-				(num_moves,),
-				self.value_id,
-				dtype=torch.long,
-				device=device
-			)
-			new_seq = torch.cat([seq, value_tokens], dim=0)
-			new_sequences.append(new_seq)
+			# Calculate how many VALUE tokens we can add without exceeding max_seq_len
+			available_space = max_seq_len - seq.shape[0]
+			num_value_tokens = min(num_moves, max(0, available_space))
 
-		# Pad to max length in batch
-		max_len = max(seq.shape[0] for seq in new_sequences)
-		padded_sequences = []
-		pad_value = self.pad_id
+			# Append VALUE tokens to input_ids (keep input_ids intact, just add fewer VALUE tokens if needed)
+			if num_value_tokens > 0:
+				value_tokens = torch.full(
+					(num_value_tokens,),
+					self.value_id,
+					dtype=torch.long,
+					device=device
+				)
+				new_input_seq = torch.cat([seq, value_tokens], dim=0)
+			else:
+				new_input_seq = seq
 
-		for seq in new_sequences:
-			padding_len = max_len - seq.shape[0]
+			new_input_sequences.append(new_input_seq)
+
+			# Pad labels with ignore_index to match input_ids length
+			label_padding_len = new_input_seq.shape[0] - label_seq.shape[0]
+			if label_padding_len > 0:
+				new_label_seq = F.pad(label_seq, (0, label_padding_len), value=self.ignore_index)
+			else:
+				new_label_seq = label_seq
+
+			new_label_sequences.append(new_label_seq)
+
+		# Pad both to max length in batch
+		max_len = max(seq.shape[0] for seq in new_input_sequences)
+
+		padded_input_sequences = []
+		padded_label_sequences = []
+
+		for input_seq, label_seq in zip(new_input_sequences, new_label_sequences):
+			padding_len = max_len - input_seq.shape[0]
 			if padding_len > 0:
-				seq = F.pad(seq, (0, padding_len), value=pad_value)
-			padded_sequences.append(seq)
+				input_seq = F.pad(input_seq, (0, padding_len), value=self.pad_id)
+				label_seq = F.pad(label_seq, (0, padding_len), value=self.ignore_index)
+			padded_input_sequences.append(input_seq)
+			padded_label_sequences.append(label_seq)
 
-		return torch.stack(padded_sequences, dim=0)
-
-
-	def _pad_labels(
-		self,
-		labels: torch.Tensor,  # [batch, seq_len]
-		input_ids_with_values: torch.Tensor,  # [batch, extended_seq_len]
-	) -> torch.Tensor:
-		"""
-		Pad labels to match extended input_ids length (without injecting VALUE tokens).
-
-		The positions corresponding to VALUE tokens and padding will be set to ignore_index.
-
-		Args:
-		    labels: Original labels [batch, seq_len]
-		    input_ids_with_values: Input IDs with VALUE tokens appended [batch, extended_seq_len]
-
-		Returns:
-		    Padded labels [batch, extended_seq_len] with ignore_index at VALUE/PAD positions
-		"""
-		batch_size = labels.shape[0]
-		extended_seq_len = input_ids_with_values.shape[1]
-		device = labels.device
-
-		# Create padded labels filled with ignore_index
-		labels_padded = torch.full(
-			(batch_size, extended_seq_len),
-			self.ignore_index,
-			dtype=labels.dtype,
-			device=device
+		return (
+			torch.stack(padded_input_sequences, dim=0),
+			torch.stack(padded_label_sequences, dim=0)
 		)
-
-		# Copy original labels to the beginning
-		original_seq_len = labels.shape[1]
-		labels_padded[:, :original_seq_len] = labels
-
-		return labels_padded
 
 
 	def _create_value_attention_mask(
@@ -402,11 +415,14 @@ class ValueCausalLoss(nn.Module):
 		"""
 		Expand scalar value_score to per-move targets using logarithmic transformation.
 
-		Formula: target = sign(score) + log(|score|) * territory_value_factor
+		Formula: target = sign(score) * (1 + log(|score|)) * territory_value_factor
 
 		This separates win/loss direction from magnitude:
 		- sign(score) captures the win/loss direction
 		- log(|score|) * factor adds magnitude information (balanced for different scales)
+
+		Special case: When |score| < 1e-6 (effectively 0, i.e., draw/tie), target = 0.0
+		This prevents log(0) = -inf which would cause nan in the loss.
 
 		Args:
 		    value_score: Final game outcome per sample [batch]
@@ -416,32 +432,38 @@ class ValueCausalLoss(nn.Module):
 		    [total_value_tokens] with expanded targets
 
 		Example (territory_value_factor=0.1):
-		    value_score: [10.0, -5.0, 20.0]
+		    value_score: [10.0, -5.0, 20.0, 0.0]
 
 		    Targets:
 		    - 10.0  -> sign=1.0,  log(10)=2.30, target = 1.0 + 2.30*0.1 = 1.23
 		    - -5.0  -> sign=-1.0, log(5)=1.61,  target = -1.0 - 1.61*0.1 = -1.161
 		    - 20.0  -> sign=1.0,  log(20)=3.00, target = 1.0 + 3.00*0.1 = 1.3
+		    - 0.0   -> (draw/tie), target = 0.0
 		"""
 		value_targets = []
 
 		for batch_idx, move_positions in enumerate(move_end_positions):
 			num_moves = len(move_positions)
 			score = value_score[batch_idx]
-			target_base = torch.sgn(score).item()
-			target = target_base * (1 + torch.log(torch.abs(score)).item()) * self.territory_value_factor
+
+			# Handle zero scores (draws/ties) - map to 0.0 target
+			if torch.abs(score).item() < 1e-6:
+				target = 0.0
+			else:
+				target_base = torch.sgn(score).item()
+				target = target_base * (1 + torch.log(torch.abs(score)).item()) * self.territory_value_factor
 
 			# Repeat for all moves
 			targets = torch.full(
 				(num_moves,),
 				target,
-				dtype=torch.float32,
+				dtype=value_score.dtype,
 				device=value_score.device
 			)
 			value_targets.append(targets)
 
 		if len(value_targets) == 0:
-			return torch.tensor([], dtype=torch.float32, device=value_score.device)
+			return torch.tensor([], dtype=value_score.dtype, device=value_score.device)
 
 		return torch.cat(value_targets, dim=0)
 
@@ -449,6 +471,7 @@ class ValueCausalLoss(nn.Module):
 	def _compute_discount_weights(
 		self,
 		move_end_positions: List[torch.Tensor],
+		dtype: torch.dtype = torch.float32,
 	) -> torch.Tensor:
 		"""
 		Compute RL discount factors for all VALUE tokens.
@@ -483,7 +506,7 @@ class ValueCausalLoss(nn.Module):
 			# Compute gamma^(N-k-1) for k in [0, N-1]
 			exponents = torch.arange(
 				num_moves - 1, -1, -1,
-				dtype=torch.float32,
+				dtype=dtype,
 				device=move_positions.device if len(move_positions) > 0 else 'cpu'
 			)
 			weights = self.gamma ** exponents  # [num_moves]
@@ -491,7 +514,7 @@ class ValueCausalLoss(nn.Module):
 			all_weights.append(weights)
 
 		if len(all_weights) == 0:
-			return torch.tensor([], dtype=torch.float32)
+			return torch.tensor([], dtype=dtype)
 
 		return torch.cat(all_weights, dim=0)
 
@@ -547,19 +570,34 @@ class ValueCausalLoss(nn.Module):
 		value_score = batch['value_score']
 		move_end_positions = batch['move_end_positions']
 
-		# Step 1: Inject VALUE tokens into input_ids only
-		input_ids_with_values = self._inject_value_tokens(input_ids, move_end_positions)
+		# Convert value_score to match model dtype (for mixed precision training)
+		# Dataset may return float32, but model could be bfloat16/float16
+		model_dtype = next(self.parameters()).dtype
+		if value_score.dtype != model_dtype:
+			value_score = value_score.to(dtype=model_dtype)
 
-		# Step 2: Pad labels to match extended sequence (without VALUE token injection)
-		labels_padded = self._pad_labels(labels, input_ids_with_values)
+		# Step 1: Inject VALUE tokens into input_ids and prepare labels (with clipping if needed)
+		input_ids_with_values, labels_padded = self._inject_value_tokens(
+			input_ids, labels, move_end_positions
+		)
 
-		# Step 3: Create custom attention mask
+		# Track actual number of VALUE tokens added per sample (may be less than num_moves if clipped)
+		actual_value_counts = []
+		max_seq_len = self.model.config.max_position_embeddings
+		for i in range(len(move_end_positions)):
+			seq_len = input_ids[i].shape[0]
+			num_moves = len(move_end_positions[i])
+			available_space = max_seq_len - seq_len
+			num_value_tokens = min(num_moves, max(0, available_space))
+			actual_value_counts.append(num_value_tokens)
+
+		# Step 2: Create custom attention mask
 		attention_mask_custom = self._create_value_attention_mask(
 			input_ids_with_values,
 			move_end_positions
 		)
 
-		# Step 4: Forward through base model
+		# Step 3: Forward through base model
 		outputs = self.model(
 			input_ids_with_values,
 			attention_mask=attention_mask_custom,
@@ -568,31 +606,39 @@ class ValueCausalLoss(nn.Module):
 		logits = outputs.logits  # [batch, extended_seq_len, vocab_size]
 		hidden_states = outputs.hidden_states[-1]  # [batch, extended_seq_len, hidden_dim]
 
-		# Step 5: Extract VALUE hidden states
+		# Step 4: Extract VALUE hidden states
 		value_hiddens, _ = self._extract_value_hidden_states(
 			hidden_states,
 			input_ids_with_values
 		)
 
-		# Step 6: Predict values
+		# Step 5: Predict values
 		if len(value_hiddens) > 0:
 			value_predictions = self.value_head(value_hiddens)  # [total_value_tokens]
 		else:
 			value_predictions = torch.tensor([], device=logits.device)
 
-		# Step 7: Compute policy loss (labels_padded already has ignore_index at VALUE/PAD positions)
+		# Step 6: Compute policy loss (labels_padded already has ignore_index at VALUE/PAD positions)
 		logits_flat = logits.view(-1, logits.shape[-1])
 		labels_flat = labels_padded.view(-1)
 
 		policy_loss = self.policy_loss_fn(logits_flat, labels_flat)
 
-		# Step 8: Compute value loss
+		# Step 7: Compute value loss
 		if len(value_predictions) > 0:
-			# Expand value_score to per-move targets
-			value_targets = self._expand_value_targets(value_score, move_end_positions)
+			# Create truncated move_end_positions for only the VALUE tokens that were actually added
+			truncated_move_end_positions = []
+			for i, num_added in enumerate(actual_value_counts):
+				if num_added > 0:
+					truncated_move_end_positions.append(move_end_positions[i][:num_added])
+				else:
+					truncated_move_end_positions.append(torch.tensor([], dtype=torch.long, device=input_ids.device))
 
-			# Compute discount weights and apply to targets
-			discount_weights = self._compute_discount_weights(move_end_positions)
+			# Expand value_score to per-move targets (only for added VALUE tokens)
+			value_targets = self._expand_value_targets(value_score, truncated_move_end_positions)
+
+			# Compute discount weights and apply to targets (only for added VALUE tokens)
+			discount_weights = self._compute_discount_weights(truncated_move_end_positions, dtype=value_score.dtype)
 			discounted_targets = value_targets * discount_weights
 
 			# MSE loss with discounted targets
@@ -600,10 +646,10 @@ class ValueCausalLoss(nn.Module):
 		else:
 			value_loss = torch.tensor(0.0, device=logits.device)
 
-		# Step 9: Combine losses
+		# Step 8: Combine losses
 		total_loss = self.lambda_policy * policy_loss + self.lambda_value * value_loss
 
-		# Step 10: Compute metrics
+		# Step 9: Compute metrics
 		with torch.no_grad():
 			# Policy metrics
 			predictions = torch.argmax(logits_flat, dim=-1)

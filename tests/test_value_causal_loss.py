@@ -130,7 +130,13 @@ class TestSequenceConstruction:
 			torch.tensor([3, 7]),  # 2 moves
 		]
 
-		result = model._inject_value_tokens(input_ids, move_end_positions)
+		labels = torch.randint(4, 128, input_ids.shape)
+
+
+		input_ids_result, labels_result = model._inject_value_tokens(input_ids, labels, move_end_positions)
+
+
+		result = input_ids_result  # Keep variable name for backward compatibility
 
 		# Should append max(3, 2) = 3 VALUE tokens
 		assert result.shape[0] == 2  # batch size preserved
@@ -161,7 +167,13 @@ class TestSequenceConstruction:
 			torch.tensor([3, 7, 11, 15, 19]),  # 5 moves
 		]
 
-		result = model._inject_value_tokens(input_ids, move_end_positions)
+		labels = torch.randint(4, 128, input_ids.shape)
+
+
+		input_ids_result, labels_result = model._inject_value_tokens(input_ids, labels, move_end_positions)
+
+
+		result = input_ids_result  # Keep variable name for backward compatibility
 
 		# Should append max(4, 1, 5) = 5 VALUE tokens
 		assert result.shape == (3, 25)  # 20 + 5
@@ -187,7 +199,13 @@ class TestSequenceConstruction:
 			torch.tensor([5]),  # 1 move
 		]
 
-		result = model._inject_value_tokens(input_ids, move_end_positions)
+		labels = torch.randint(4, 128, input_ids.shape)
+
+
+		input_ids_result, labels_result = model._inject_value_tokens(input_ids, labels, move_end_positions)
+
+
+		result = input_ids_result  # Keep variable name for backward compatibility
 
 		# Should append max(0, 1) = 1 VALUE token
 		assert result.shape == (2, 11)  # 10 + 1
@@ -219,7 +237,13 @@ class TestSequenceConstruction:
 			torch.tensor([8, 18, 28]),
 		]
 
-		result = model._inject_value_tokens(input_ids, move_end_positions)
+		labels = torch.randint(4, 128, input_ids.shape)
+
+
+		input_ids_result, labels_result = model._inject_value_tokens(input_ids, labels, move_end_positions)
+
+
+		result = input_ids_result  # Keep variable name for backward compatibility
 
 		assert result.shape[0] == batch_size
 		assert result.shape[1] > seq_len  # Expanded with VALUE tokens

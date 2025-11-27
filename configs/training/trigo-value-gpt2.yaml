@@ -1,0 +1,131 @@
+# Trigo ValueCausalLoss + GPT-2 Training Configuration
+# Dual-head model: Policy (next-token) + Value (game outcome) learning
+
+# Experiment ID (determines output directory)
+id: trigor/${date:}-${hydra:job.config_name}
+
+# Paths
+paths:
+  root: .
+  data: ${paths.root}/data
+  output: ${paths.root}/outputs
+
+# Data configuration
+data:
+  type: TGNValueDataset
+  data_dir: ${paths.root}/third_party/trigo/trigo-web/tools/output/selfplay
+  max_length: 8192
+  min_length: 10
+  max_file_size: 10000
+  tokenizer_config: {}
+
+  # Train/validation split
+  # Format: "phases/cycle" or "*phases/cycle" (* for shuffle)
+  # Phases support range syntax with '..' for convenience
+  # Example: "*0..7/10" = 80% for training (phases 0-7, shuffled)
+  #          "8,9/10" = 20% for validation (phases 8-9, no shuffle)
+  train_split: "*0..7/10"  # 80% training set with shuffle
+  val_split: "8,9/10"      # 20% validation set without shuffle
+
+  # DataLoader settings
+  loader:
+    batch_size: 1
+    shuffle: true
+    num_workers: 0  # Set to 0 to avoid multiprocessing issues with file I/O
+    pin_memory: true
+
+# Model configuration - GPT-2 with ValueHead wrapped in ValueCausalLoss
+model:
+  type: ValueCausalLoss
+  config:
+    model_config:
+      type: GPT2CausalLM
+      config:
+        vocab_size: 128  # TGN compact tokenizer (reduced from 259)
+        hidden_size: 256
+        num_layers: 6
+        num_heads: 8
+        max_seq_len: 8192
+        dropout: 0.1
+        activation: gelu_new
+        intermediate_size: 1024  # FFN inner dimension (4 * hidden_size)
+        layer_norm_eps: 1e-5
+        use_cache: true
+
+    # Value head configuration
+    value_head_config:
+      hidden_dim: 256  # Must match base model hidden_size
+      intermediate_dim: 512  # FFN hidden dimension
+      bottleneck_dim: 64  # Bottleneck dimension for value prediction
+      dropout: 0.1
+
+    # Loss weights
+    lambda_policy: 1.0  # Policy (next-token prediction) loss weight
+    lambda_value: 0.5   # Value (game outcome) loss weight
+
+    # RL discount factor
+    gamma: 0.99  # Discount factor for temporal credit assignment
+
+    # Value target transformation
+    territory_value_factor: 1.0  # Weight for log(|score|) term: target = sign(score) * (1 + log(|score|)) * factor
+
+    # Token IDs
+    ignore_index: 0  # PAD token ID (ignored in policy loss)
+    value_id: 3      # VALUE token ID (for value prediction)
+    pad_id: 0        # PAD token ID
+
+    # Regularization
+    label_smoothing: 0.1  # Label smoothing for policy loss
+
+# Training configuration
+training:
+  epochs: 10
+  learning_rate: 1e-4
+  weight_decay: 0.01
+  warmup_steps: 1000
+  max_grad_norm: 1.0
+  gradient_accumulation_steps: 1
+  epoch_size: null  # Number of examples per epoch (null = full dataset, can repeat/subsample)
+  dtype: bfloat16  # Model dtype: float32, float16, bfloat16 (fp32, fp16, bf16 also accepted)
+
+  # Learning rate scheduler
+  scheduler:
+    type: inverse_sqrt
+    d_model: 256      # Should match model hidden_size
+    lr_mul: 1.0       # Learning rate multiplier
+
+  # Checkpointing
+  save_frequency: 1  # Save every N validations (not epochs)
+  keep_n_checkpoints: 3
+  save_mode: best  # 'best', 'all', or 'latest'
+
+  # Monitoring (ValueCausalLoss has combined loss)
+  monitor:
+    field: val_loss  # Monitor combined loss (policy + value)
+    mode: min  # 'min' for loss, 'max' for accuracy
+
+  # Logging
+  log_frequency: 16  # Log every N examples (not steps)
+  wandb:
+    enabled: true
+    # project is trigor by default
+    tags:
+      - gpt2
+      - value-head
+      - dual-head
+      - rl-discount
+
+  # Environment variables (set during trainer initialization, only if not already set)
+  # Allows external override via shell: CUDA_VISIBLE_DEVICES=0 python train_lm.py ...
+  # Example: env: {CUDA_VISIBLE_DEVICES: "0", OMP_NUM_THREADS: "8"}
+  env: ~
+
+# Evaluation configuration
+eval:
+  eval_frequency: 2  # Evaluate every N epochs
+  eval_batches: 50
+
+# Device and reproducibility
+device: cuda
+seed: 42
+deterministic: true

@@ -8272,3 +8272,170 @@ for batch in dataloader:
 The ValueCausalLoss module successfully implements a sophisticated dual-head architecture for combined policy and value learning. The custom attention mechanism prevents information leakage, the RL discount provides proper temporal credit assignment, and comprehensive testing validates all components. The module is production-ready and fully integrated with the existing training infrastructure.
 
 </details>
+
+
+## 2025/11/27
+
+
+> Fixed ValueCausalLoss backward pass issues and added comprehensive mixed-precision testing. Resolved dtype mismatches and implemented smart sequence clipping for long games.
+
+<details>
+<summary>Backward pass testing and mixed-precision support completed</summary>
+
+### Issues Fixed
+
+**1. Sequence Length Clipping**
+
+Initial notebook test (test_value_gpt2.ipynb) was failing with IndexError when input_ids + VALUE tokens exceeded max_position_embeddings. Implemented smart clipping strategy:
+
+```python
+# Smart clipping: preserve full input_ids, clip VALUE tokens if needed
+available_space = max_seq_len - seq.shape[0]
+num_value_tokens = min(num_moves, max(0, available_space))
+
+if num_value_tokens > 0:
+    value_tokens = torch.full((num_value_tokens,), self.value_id, ...)
+    new_input_seq = torch.cat([seq, value_tokens], dim=0)
+else:
+    new_input_seq = seq
+```
+
+**Key Design Decision**: Prioritize policy learning by keeping full input_ids/labels intact. If sequence is too long, add fewer VALUE tokens rather than clipping the game transcript.
+
+**2. Dtype Mismatches in Mixed Precision**
+
+Error when training with bfloat16: `RuntimeError: Found dtype Float but expected BFloat16`
+
+Root cause: value_targets and discount_weights were hardcoded to float32:
+
+```python
+# Before (incorrect):
+targets = torch.full(..., dtype=torch.float32, ...)  # Always float32
+
+# After (correct):
+targets = torch.full(..., dtype=value_score.dtype, ...)  # Match model dtype
+```
+
+Fixed in `_expand_value_targets()` and `_compute_discount_weights()`:
+
+```python
+def _compute_discount_weights(
+    self,
+    move_end_positions: List[torch.Tensor],
+    dtype: torch.dtype = torch.float32,  # Added dtype parameter
+) -> torch.Tensor:
+    # ...
+    exponents = torch.arange(
+        num_moves - 1, -1, -1,
+        dtype=dtype,  # Use passed dtype
+        device=move_positions.device
+    )
+    weights = self.gamma ** exponents
+    return weights
+
+# Call site:
+discount_weights = self._compute_discount_weights(
+    truncated_move_end_positions,
+    dtype=value_score.dtype  # Auto-match model dtype
+)
+```
+
+**3. Code Cleanup**
+
+Refactored padding code to use PyTorch's `F.pad` API:
+
+```python
+# Before:
+ignore_padding = torch.full((label_padding_len,), self.ignore_index, ...)
+new_label_seq = torch.cat([label_seq, ignore_padding], dim=0)
+
+# After:
+new_label_seq = F.pad(label_seq, (0, label_padding_len), value=self.ignore_index)
+```
+
+### New Test Suite: test_value_causal_loss_backward.py
+
+Created comprehensive backward pass tests covering:
+
+1. **test_backward_float32**: Baseline float32 training
+2. **test_backward_bfloat16**: Mixed precision with bfloat16
+3. **test_backward_float16**: Mixed precision with float16
+4. **test_gradient_flow**: Verify gradients reach both base model and value head
+5. **test_multiple_backward_passes**: Test multiple training iterations
+
+**Key Learning**: PyTorch gradients match parameter dtype (not always float32). Initial test assertions were incorrect:
+
+```python
+# Wrong assumption:
+assert param.grad.dtype == torch.float32  # ❌ Fails for bfloat16/float16 models
+
+# Correct behavior:
+assert param.grad.dtype == param.dtype  # ✅ Gradients match parameter dtype
+```
+
+### Test Results
+
+All tests passing:
+
+```bash
+# Backward pass tests (5 tests)
+tests/test_value_causal_loss_backward.py::TestBackwardPass::test_backward_float32 PASSED
+tests/test_value_causal_loss_backward.py::TestBackwardPass::test_backward_bfloat16 PASSED
+tests/test_value_causal_loss_backward.py::TestBackwardPass::test_backward_float16 PASSED
+tests/test_value_causal_loss_backward.py::TestBackwardPass::test_gradient_flow PASSED
+tests/test_value_causal_loss_backward.py::TestBackwardPass::test_multiple_backward_passes PASSED
+
+# Full test suite (35 tests)
+tests/test_value_causal_loss.py - 35 passed
+```
+
+### Files Modified
+
+**trigor/models/valueCausalLoss.py:**
+- `_inject_value_tokens()`: Implemented smart clipping, updated to return (input_ids, labels) tuple
+- `_expand_value_targets()`: Changed dtype from hardcoded float32 to value_score.dtype
+- `_compute_discount_weights()`: Added dtype parameter for flexible precision
+- `forward()`: Track actual VALUE tokens added, create truncated move_end_positions
+- Docstring fixes: Removed END token from input_ids examples (only in labels)
+- Padding refactor: Use F.pad instead of manual tensor creation
+
+**tests/test_value_causal_loss.py:**
+- Updated all test calls to new `_inject_value_tokens()` signature
+
+**tests/test_value_causal_loss_backward.py:** (NEW)
+- Comprehensive backward pass tests for float32/bfloat16/float16
+- Gradient flow verification
+- Multiple iteration testing
+
+### Mixed Precision Support
+
+ValueCausalLoss now fully supports:
+- **float32** (default): Standard precision training
+- **bfloat16**: Recommended for modern GPUs (A100, RTX 3090+)
+- **float16**: For older GPUs with limited memory
+
+All precision modes tested and verified with backward pass.
+
+### Success Criteria - All Met ✅
+
+- ✅ Smart clipping preserves policy learning quality
+- ✅ Mixed precision training works (float32/bfloat16/float16)
+- ✅ Backward pass computes gradients correctly for all dtypes
+- ✅ Gradients match parameter dtype (correct PyTorch behavior)
+- ✅ All 35 core tests pass
+- ✅ All 5 backward pass tests pass
+- ✅ Code cleanup with F.pad
+- ✅ Comprehensive documentation
+
+### Next Steps
+
+ValueCausalLoss module is now production-ready for training:
+1. ✅ Smart sequence clipping for long games
+2. ✅ Mixed precision support verified
+3. ✅ Backward pass tested comprehensively
+4. ✅ All edge cases covered
+
+Ready to start full-scale training experiments with TGNValueDataset.
+
+</details>
+
