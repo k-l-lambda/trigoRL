@@ -221,6 +221,13 @@ class LMTrainer:
 
 		return dtype_map[dtype_str_lower]
 
+	def _extract_scalar(self, value) -> float:
+		"""Extract scalar value from tensor or number."""
+		if torch.is_tensor(value):
+			return value.item()
+		return float(value)
+
+
 
 	def _create_model(self) -> nn.Module:
 		"""
@@ -347,9 +354,11 @@ class LMTrainer:
 			initial_metrics = self._validate_epoch()
 			logger.info("")
 			logger.info("Initial model metrics:")
-			logger.info(f"  Val Loss: {initial_metrics['val_loss']:.4f}")
-			logger.info(f"  Val Error: {initial_metrics['val_error']:.4f}")
-			logger.info(f"  Val Perplexity: {initial_metrics['val_perplexity']:.2f}")
+			# Log all available metrics dynamically
+			for key, value in sorted(initial_metrics.items()):
+				if isinstance(value, float):
+					display_key = key[4:] if key.startswith('val_') else key
+					logger.info(f"  {display_key.capitalize()}: {value:.4f}")
 			logger.info("")
 
 		try:
@@ -392,12 +401,8 @@ class LMTrainer:
 		"""Train for one epoch."""
 		self.model.train()
 
-		# Accumulators
-		total_loss = 0.0
-		total_error = 0.0
-		total_perplexity = 0.0
-		total_top5_error = 0.0
-		total_tokens = 0
+		# Accumulators - use dictionary for dynamic metrics
+		metric_sums = {}
 		num_batches = 0
 
 		# Determine number of batches for this epoch
@@ -427,6 +432,9 @@ class LMTrainer:
 			for key in batch:
 				if isinstance(batch[key], torch.Tensor):
 					batch[key] = batch[key].to(self.config.device)
+				elif isinstance(batch[key], list) and len(batch[key]) > 0 and isinstance(batch[key][0], torch.Tensor):
+					# Handle list of tensors (e.g., move_end_positions)
+					batch[key] = [t.to(self.config.device) if isinstance(t, torch.Tensor) else t for t in batch[key]]
 
 			# Forward pass (pass entire batch dict)
 			outputs = self.model(batch)
@@ -435,21 +443,27 @@ class LMTrainer:
 			loss = outputs['loss'] / self.config.training.gradient_accumulation_steps
 			loss.backward()
 
-			# Accumulate metrics (unscaled)
-			total_loss += outputs['loss'].item()
-			total_error += outputs['error'].item()
-			total_perplexity += outputs['perplexity'].item()
-			total_top5_error += outputs['top5_error'].item()
-			total_tokens += outputs['num_tokens'].item()
+			# Accumulate all metrics dynamically
+			for key, value in outputs.items():
+				if key not in metric_sums:
+					metric_sums[key] = 0.0
+				metric_sums[key] += self._extract_scalar(value)
 			num_batches += 1
 
-			# Update progress bar
-			pbar.set_postfix({
-				'loss': f"{outputs['loss'].item():.4f}",
-				'acc': f"{outputs['error'].item():.4f}",
-				'ppl': f"{outputs['perplexity'].item():.2f}",
-				'lr': f"{self.optimizer.param_groups[0]['lr']:.2e}",
-			})
+			# Update progress bar - show available metrics
+			postfix = {'loss': f"{outputs['loss'].item():.4f}"}
+
+			# Add commonly used metrics if available
+			if 'error' in outputs:
+				postfix['err'] = f"{self._extract_scalar(outputs['error']):.4f}"
+			elif 'policy_error' in outputs:
+				postfix['err'] = f"{self._extract_scalar(outputs['policy_error']):.4f}"
+
+			if 'perplexity' in outputs:
+				postfix['ppl'] = f"{self._extract_scalar(outputs['perplexity']):.2f}"
+
+			postfix['lr'] = f"{self.optimizer.param_groups[0]['lr']:.2e}"
+			pbar.set_postfix(postfix)
 
 			# Optimizer step (after accumulation)
 			if (batch_idx + 1) % self.config.training.gradient_accumulation_steps == 0:
@@ -477,24 +491,20 @@ class LMTrainer:
 
 				# Log to wandb (based on examples processed)
 				if self.logger and (self.global_examples % self.config.training.log_frequency == 0):
-					self.logger.log({
+					log_dict = {
 						'train/loss': outputs['loss'].item(),
-						'train/error': outputs['error'].item(),
-						'train/perplexity': outputs['perplexity'].item(),
-						'train/top5_error': outputs['top5_error'].item(),
 						'train/learning_rate': self.optimizer.param_groups[0]['lr'],
-					}, step=self.global_examples)
+					}
+					# Log all other metrics from model output
+					for key, value in outputs.items():
+						if key != 'loss':  # Only skip 'loss' itself (already logged)
+							log_dict[f'train/{key}'] = self._extract_scalar(value)
+					self.logger.log(log_dict, step=self.global_examples)
 
 		pbar.close()
 
 		# Compute averages
-		avg_metrics = {
-			'loss': total_loss / num_batches,
-			'error': total_error / num_batches,
-			'perplexity': total_perplexity / num_batches,
-			'top5_error': total_top5_error / num_batches,
-			'tokens': total_tokens,
-		}
+		avg_metrics = {key: value / num_batches for key, value in metric_sums.items()}
 
 		return avg_metrics
 
@@ -503,12 +513,8 @@ class LMTrainer:
 		"""Validate for one epoch."""
 		self.model.eval()
 
-		# Accumulators
-		total_loss = 0.0
-		total_error = 0.0
-		total_perplexity = 0.0
-		total_top5_error = 0.0
-		total_tokens = 0
+		# Accumulators - use dictionary for dynamic metrics
+		metric_sums = {}
 		num_batches = 0
 
 		# Limit validation batches if specified
@@ -527,36 +533,44 @@ class LMTrainer:
 				for key in batch:
 					if isinstance(batch[key], torch.Tensor):
 						batch[key] = batch[key].to(self.config.device)
+					elif isinstance(batch[key], list) and len(batch[key]) > 0 and isinstance(batch[key][0], torch.Tensor):
+						# Handle list of tensors (e.g., move_end_positions)
+						batch[key] = [t.to(self.config.device) if isinstance(t, torch.Tensor) else t for t in batch[key]]
 
 				# Forward pass (pass entire batch dict)
 				outputs = self.model(batch)
 
-				# Accumulate metrics
-				total_loss += outputs['loss'].item()
-				total_error += outputs['error'].item()
-				total_perplexity += outputs['perplexity'].item()
-				total_top5_error += outputs['top5_error'].item()
-				total_tokens += outputs['num_tokens'].item()
+				# Accumulate all metrics dynamically
+				for key, value in outputs.items():
+					if key not in metric_sums:
+						metric_sums[key] = 0.0
+					metric_sums[key] += self._extract_scalar(value)
 				num_batches += 1
 
-				# Update progress bar
-				pbar.set_postfix({
-					'loss': f"{outputs['loss'].item():.4f}",
-					'err': f"{outputs['error'].item():.4f}",
-					'acc': f"{(1 - outputs['error'].item()):.4f}",
-					'ppl': f"{outputs['perplexity'].item():.2f}",
-				})
+				# Update progress bar - show available metrics
+				postfix = {'loss': f"{outputs['loss'].item():.4f}"}
+
+				# Add commonly used metrics if available
+				error_val = None
+				if 'error' in outputs:
+					error_val = self._extract_scalar(outputs['error'])
+					postfix['err'] = f"{error_val:.4f}"
+				elif 'policy_error' in outputs:
+					error_val = self._extract_scalar(outputs['policy_error'])
+					postfix['err'] = f"{error_val:.4f}"
+
+				if error_val is not None:
+					postfix['acc'] = f"{(1 - error_val):.4f}"
+
+				if 'perplexity' in outputs:
+					postfix['ppl'] = f"{self._extract_scalar(outputs['perplexity']):.2f}"
+
+				pbar.set_postfix(postfix)
 
 		pbar.close()
 
-		# Compute averages
-		avg_metrics = {
-			'val_loss': total_loss / num_batches,
-			'val_error': total_error / num_batches,
-			'val_perplexity': total_perplexity / num_batches,
-			'val_top5_error': total_top5_error / num_batches,
-			'val_tokens': total_tokens,
-		}
+		# Compute averages with 'val_' prefix
+		avg_metrics = {f'val_{key}': value / num_batches for key, value in metric_sums.items()}
 
 		# Log to wandb
 		if self.logger:
@@ -566,17 +580,32 @@ class LMTrainer:
 
 
 	def _log_epoch_summary(self, epoch: int, train_metrics: Dict, val_metrics: Dict):
-		"""Log epoch summary."""
+		"""Log epoch summary dynamically based on available metrics."""
 		logger.info("")
 		logger.info(f"Epoch {epoch+1}/{self.config.training.epochs} Summary:")
-		logger.info(f"  Train Loss: {train_metrics['loss']:.4f}")
-		logger.info(f"  Train Error: {train_metrics['error']:.4f}")
-		logger.info(f"  Train Perplexity: {train_metrics['perplexity']:.2f}")
 
+		# Log train metrics
+		if 'loss' in train_metrics:
+			logger.info(f"  Train Loss: {train_metrics['loss']:.4f}")
+
+		# Log other train metrics (skip loss since we already logged it)
+		for key, value in sorted(train_metrics.items()):
+			if key not in ['loss']:
+				if isinstance(value, float):
+					logger.info(f"  Train {key.capitalize()}: {value:.4f}")
+
+		# Log validation metrics
 		if val_metrics:
-			logger.info(f"  Val Loss: {val_metrics['val_loss']:.4f}")
-			logger.info(f"  Val Error: {val_metrics['val_error']:.4f}")
-			logger.info(f"  Val Perplexity: {val_metrics['val_perplexity']:.2f}")
+			if 'val_loss' in val_metrics:
+				logger.info(f"  Val Loss: {val_metrics['val_loss']:.4f}")
+
+			# Log other val metrics (skip loss since we already logged it)
+			for key, value in sorted(val_metrics.items()):
+				if key not in ['val_loss']:
+					if isinstance(value, float):
+						# Remove 'val_' prefix for display
+						display_key = key[4:] if key.startswith('val_') else key
+						logger.info(f"  Val {display_key.capitalize()}: {value:.4f}")
 
 
 	def _save_checkpoint(self, val_metrics: Dict):
