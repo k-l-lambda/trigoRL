@@ -2,7 +2,7 @@
 # GPT-2 with standard multi-head attention (MHA)
 
 # Experiment ID (determines output directory)
-id: trigor/${date:}-${hydra:job.config_name}
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
 
 # Paths
 paths:

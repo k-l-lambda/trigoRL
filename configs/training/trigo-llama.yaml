@@ -1,7 +1,7 @@
 # Trigo LLaMA Training Configuration
 # LLaMA with Grouped Query Attention (GQA) for efficient inference
 
-id: trigor/${date:}-${hydra:job.config_name}
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
 
 # Paths
 paths:

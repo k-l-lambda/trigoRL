@@ -2,7 +2,7 @@
 # Dual-head model: Policy (next-token) + Value (game outcome) learning
 
 # Experiment ID (determines output directory)
-id: trigor/${date:}-${hydra:job.config_name}
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
 
 # Paths
 paths:

@@ -1,7 +1,7 @@
 # Trigo RWKV Training Configuration
 # RWKV with linear attention for efficient long-sequence processing
 
-id: trigor/${date:}-${hydra:job.config_name}
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
 
 # Paths
 paths:
