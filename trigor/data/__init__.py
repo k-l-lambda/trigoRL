@@ -9,7 +9,7 @@ from trigor.data.registry import DATASETS, list_datasets, make_dataset, register
 from trigor.data.tgn_dataset import TGNDataset
 from trigor.data.tgn_value_dataset import TGNValueDataset
 from trigor.data.tokenizer import TGNByteTokenizer
-from trigor.data.utils import parse_split
+from trigor.data.utils import make_dataloader, parse_split
 
 __all__ = [
 	"TGNByteTokenizer",
@@ -18,6 +18,7 @@ __all__ = [
 	"DATASETS",
 	"register_dataset",
 	"make_dataset",
+	"make_dataloader",
 	"list_datasets",
 	"parse_split",
 ]

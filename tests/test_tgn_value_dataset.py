@@ -354,3 +354,111 @@ class TestIntegration:
 		assert len(dataset) == 1
 		sample = dataset[0]
 		assert sample['value_score'].item() == -5.0
+
+	def test_make_dataset_factory(self, tmp_path):
+		"""Test dataset creation via make_dataset factory function."""
+		from trigor.data import make_dataset
+
+		# Create test files with different scores
+		(tmp_path / "game1.tgn").write_text("1. abc def\n; -10")
+		(tmp_path / "game2.tgn").write_text("1. xyz\n; 5")
+
+		config = {
+			'data_dir': str(tmp_path),
+			'max_length': 256,
+			'min_length': 1,
+			'parse_value': True,
+		}
+
+		# Create dataset via factory
+		dataset = make_dataset('TGNValueDataset', config)
+
+		# Verify correct type
+		assert isinstance(dataset, TGNValueDataset)
+		assert dataset.__class__.__name__ == 'TGNValueDataset'
+
+		# Verify dataset works correctly
+		assert len(dataset) == 2
+
+		# Check first sample
+		sample0 = dataset[0]
+		assert 'value_score' in sample0
+		assert 'move_end_positions' in sample0
+		assert sample0['value_score'].item() == -10.0
+		assert len(sample0['move_end_positions']) == 2  # 2 moves
+
+		# Check second sample
+		sample1 = dataset[1]
+		assert sample1['value_score'].item() == 5.0
+		assert len(sample1['move_end_positions']) == 1  # 1 move
+
+		# Verify parse_value attribute
+		assert hasattr(dataset, 'parse_value')
+		assert dataset.parse_value is True
+
+	def test_make_dataset_with_parse_value_disabled(self, tmp_path):
+		"""Test make_dataset with parse_value=False."""
+		from trigor.data import make_dataset
+
+		# Create test file
+		(tmp_path / "test.tgn").write_text("1. abc\n; 10")
+
+		config = {
+			'data_dir': str(tmp_path),
+			'max_length': 128,
+			'parse_value': False,  # Disable value parsing
+		}
+
+		dataset = make_dataset('TGNValueDataset', config)
+
+		# Should be TGNValueDataset instance
+		assert isinstance(dataset, TGNValueDataset)
+
+		# But should not have value fields
+		sample = dataset[0]
+		assert 'value_score' not in sample
+		assert 'move_end_positions' not in sample
+
+		# Verify parse_value attribute is False
+		assert dataset.parse_value is False
+
+	def test_make_dataloader_utility(self, tmp_path):
+		"""Test make_dataloader utility function."""
+		from trigor.data import make_dataloader
+
+		# Create test files
+		for i in range(5):
+			(tmp_path / f"game{i}.tgn").write_text(f"1. abc def\n; {i}")
+
+		config = {
+			'data_dir': str(tmp_path),
+			'max_length': 128,
+		}
+
+		# Create dataloader using utility function
+		loader = make_dataloader(
+			dataset_type='TGNValueDataset',
+			config=config,
+			batch_size=2,
+			shuffle=False,
+			num_workers=0,
+		)
+
+		# Verify loader properties
+		assert loader is not None
+		assert len(loader.dataset) == 5
+		assert loader.batch_size == 2
+		assert len(loader) == 3  # 5 samples / 2 batch_size = 3 batches
+
+		# Verify collate function is applied
+		batch = next(iter(loader))
+		assert 'input_ids' in batch
+		assert 'value_score' in batch
+		assert 'move_end_positions' in batch
+		assert batch['value_score'].shape == (2,)  # Batch size
+		assert isinstance(batch['move_end_positions'], list)
+		assert len(batch['move_end_positions']) == 2
+
+		# Verify dataset type is correct
+		assert isinstance(loader.dataset, TGNValueDataset)
+

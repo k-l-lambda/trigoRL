@@ -305,3 +305,13 @@ class TGNValueDataset(TGNDataset):
 			collated['move_end_positions'] = [x['move_end_positions'] for x in batch]
 
 		return collated
+
+	def __repr__(self) -> str:
+		"""String representation of TGNValueDataset."""
+		return (
+			f"TGNValueDataset(num_files={len(self.files)}, "
+			f"max_length={self.max_length}, "
+			f"data_dir='{self.data_dir}', "
+			f"parse_value={self.parse_value})"
+		)
+

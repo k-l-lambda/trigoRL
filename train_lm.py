@@ -19,7 +19,6 @@ import hydra
 import torch
 from dotenv import load_dotenv
 from omegaconf import DictConfig, OmegaConf
-from torch.utils.data import DataLoader
 
 # Load environment variables from .env.local (for wandb API keys, etc.)
 load_dotenv(dotenv_path='.env.local')
@@ -37,7 +36,7 @@ OmegaConf.register_new_resolver(
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from trigor.data import TGNDataset, make_dataset
+from trigor.data import make_dataloader
 from trigor.training.lm_trainer import LMTrainer
 
 
@@ -157,46 +156,39 @@ def create_dataloaders(config: DictConfig) -> tuple:
 	logger.info("Creating Datasets")
 	logger.info("=" * 80)
 
-	# Create training dataset
+	# Create training dataloader
 	train_config = OmegaConf.to_container(config.data, resolve=True)
 	train_config['split'] = config.data.train_split
-	train_dataset = make_dataset(config.data.type, train_config)
-
-	# Create validation dataset
-	val_dataset = None
-	if config.data.get('val_split', None):
-		val_config = OmegaConf.to_container(config.data, resolve=True)
-		val_config['split'] = config.data.val_split
-		val_dataset = make_dataset(config.data.type, val_config)
-
-	# Create dataloaders
-	train_loader = DataLoader(
-		train_dataset,
+	train_loader = make_dataloader(
+		dataset_type=config.data.type,
+		config=train_config,
 		batch_size=config.data.loader.batch_size,
 		shuffle=config.data.loader.shuffle,
 		num_workers=config.data.loader.num_workers,
 		pin_memory=config.data.loader.pin_memory,
-		collate_fn=TGNDataset.collate_batch,
-		drop_last=True,  # Drop incomplete batches
+		drop_last=True,  # Drop incomplete batches for training
 	)
 
+	# Create validation dataloader
 	val_loader = None
-	if val_dataset:
-		val_loader = DataLoader(
-			val_dataset,
+	if config.data.get('val_split', None):
+		val_config = OmegaConf.to_container(config.data, resolve=True)
+		val_config['split'] = config.data.val_split
+		val_loader = make_dataloader(
+			dataset_type=config.data.type,
+			config=val_config,
 			batch_size=config.data.loader.batch_size,
 			shuffle=False,  # Don't shuffle validation
 			num_workers=config.data.loader.num_workers,
 			pin_memory=config.data.loader.pin_memory,
-			collate_fn=TGNDataset.collate_batch,
-			drop_last=False,
+			drop_last=False,  # Keep all validation samples
 		)
 
 	logger.info("")
 	logger.info("Datasets created:")
-	logger.info(f"  Training: {len(train_dataset)} samples, {len(train_loader)} batches")
+	logger.info(f"  Training: {len(train_loader.dataset)} samples, {len(train_loader)} batches")
 	if val_loader:
-		logger.info(f"  Validation: {len(val_dataset)} samples, {len(val_loader)} batches")
+		logger.info(f"  Validation: {len(val_loader.dataset)} samples, {len(val_loader)} batches")
 
 	return train_loader, val_loader
 
