@@ -337,9 +337,12 @@ class ValueCausalLoss(nn.Module):
 		batch_size, total_seq_len = input_ids.shape
 		device = input_ids.device
 
+		# Get model's dtype for attention mask
+		model_dtype = next(self.parameters()).dtype
+
 		# Start with standard causal mask
 		causal_mask = torch.tril(
-			torch.ones(total_seq_len, total_seq_len, device=device)
+			torch.ones(total_seq_len, total_seq_len, dtype=model_dtype, device=device)
 		)
 		attention_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1).clone()
 
