@@ -8439,3 +8439,267 @@ Ready to start full-scale training experiments with TGNValueDataset.
 
 </details>
 
+
+## 2025/11/30
+
+
+> Fix `make_dataset('TGNValueDataset')` return type display issue - it shows as TGNDataset instead of TGNValueDataset.
+
+<details>
+<summary>Dataset factory and dataloader utilities implemented</summary>
+
+### Issue Identified
+
+`make_dataset('TGNValueDataset')` was returning the correct type but displaying as `TGNDataset(...)` due to inherited `__repr__` method.
+
+### Changes Made
+
+**1. TGNValueDataset enhancements** (`trigor/data/tgn_value_dataset.py`):
+- Added `__repr__` method showing correct class name and `parse_value` parameter
+- Implemented `from_config` classmethod supporting TGNValueDataset-specific parameters
+
+**2. New dataloader utility** (`trigor/data/utils.py`):
+```python
+def make_dataloader(
+    dataset_type: str,
+    config: Union[Dict, DictConfig],
+    batch_size: int = 32,
+    shuffle: bool = True,
+    num_workers: int = 0,
+    **dataloader_kwargs
+) -> DataLoader:
+    """Create dataset and DataLoader with automatic collate function detection."""
+```
+
+Features:
+- Creates dataset via registry
+- Auto-detects and uses dataset's `collate_batch` method
+- Simplifies dataloader creation in training scripts
+
+**3. Refactored train_lm.py**:
+- Replaced manual dataset + dataloader creation with `make_dataloader()`
+- Cleaner, more maintainable code
+
+**4. Test coverage**:
+- `test_make_dataset_factory`: Verify correct type returned
+- `test_make_dataset_with_parse_value_disabled`: Test parse_value parameter
+- `test_make_dataloader_utility`: Test unified utility function
+
+All 20 tests passing in test_tgn_value_dataset.py.
+
+</details>
+
+
+> Make LMTrainer model-agnostic by removing hardcoded metric field names. The trainer should dynamically handle any metrics the model outputs.
+
+<details>
+<summary>LMTrainer refactored to be completely model-agnostic</summary>
+
+### Problem
+
+LMTrainer was too coupled to specific metric field names ('error', 'perplexity', etc.), requiring adaptation logic when models used different naming conventions (e.g., 'policy_error' vs 'error').
+
+### Solution
+
+Refactored LMTrainer to dynamically handle all model outputs without assumptions (except `loss` which is required).
+
+### Key Changes
+
+**1. Removed `_get_metric()` adapter method**
+- Previously tried to match field name variations
+- Added unnecessary complexity and coupling
+
+**2. Added `_extract_scalar()` helper**
+```python
+def _extract_scalar(self, value) -> float:
+    """Extract scalar value from tensor or number."""
+    if torch.is_tensor(value):
+        return value.item()
+    return float(value)
+```
+
+**3. Dynamic metric accumulation**
+```python
+# Training/validation loops now use dictionaries
+metric_sums = {}
+for key, value in outputs.items():
+    if key not in metric_sums:
+        metric_sums[key] = 0.0
+    metric_sums[key] += self._extract_scalar(value)
+```
+
+**4. Flexible progress bars**
+- Check for common metrics ('error' or 'policy_error', 'perplexity')
+- Display if available, skip if not
+
+**5. Automatic wandb logging**
+- Training: All model outputs logged as `train/{metric_name}`
+- Validation: All metrics auto-prefixed with `val_`
+- Only skips 'loss' itself (already logged separately)
+
+**6. Dynamic epoch summaries**
+- Iterate over all available metrics and log them
+- Handle 'val_' prefix removal for display
+- Alphabetically sorted
+
+### Benefits
+
+1. **True Model Agnosticism**: Works with any model returning `loss` + optional metrics
+2. **No Adaptation Required**: Models define their own output format freely
+3. **Automatic Metric Discovery**: All model outputs logged without configuration
+4. **Better Extensibility**: New models with new metrics work immediately
+5. **Cleaner Code**: Removed complex field matching logic
+
+### Example Model Outputs
+
+**ValueCausalLoss outputs:**
+- loss, policy_loss, value_loss
+- policy_error, value_mae, value_mse
+- num_policy_tokens, num_value_predictions
+
+**All automatically:**
+- ✅ Accumulated during training/validation
+- ✅ Displayed in progress bars (common ones)
+- ✅ Logged to wandb with proper prefixes
+- ✅ Printed in epoch summaries
+
+### Backward Compatibility
+
+Models with old field names ('error', 'perplexity') continue to work unchanged.
+
+### Tests
+
+- All 35 ValueCausalLoss tests passing
+- All 20 TGNValueDataset tests passing
+
+</details>
+
+
+> Remove `.local` suffix from experiment IDs when using `.local` config files (e.g., `trigo-gpt2.local.yaml` → `trigo-gpt2`).
+
+<details>
+<summary>Hydra resolver for .local suffix removal implemented</summary>
+
+### Issue
+
+Config files with `.local` suffix (e.g., `trigo-gpt2.local.yaml`) were creating experiment directories with the suffix included (e.g., `20251129-trigo-gpt2.local`).
+
+### Solution
+
+Updated all training configs to use `remove_local_suffix` resolver:
+
+```yaml
+# Before
+id: trigor/${date:}-${hydra:job.config_name}
+
+# After
+id: trigor/${date:}-${remove_local_suffix:${hydra:job.config_name}}
+```
+
+### Updated Configs
+- `trigo-value-gpt2.yaml`
+- `trigo-gpt2.yaml`
+- `trigo-gpt2-invsqrt.yaml`
+- `trigo-llama.yaml`
+- `trigo-rwkv.yaml`
+
+### Result
+
+- `trigo-gpt2.yaml` → `20251129-trigo-gpt2`
+- `trigo-gpt2.local.yaml` → `20251129-trigo-gpt2` (suffix removed)
+
+Verified working with test runs.
+
+</details>
+
+
+> Add TensorBoard logging support to training, mirroring wandb implementation. Include tensorboard configuration in all training configs.
+
+<details>
+<summary>TensorBoard integration completed</summary>
+
+### Implementation
+
+**1. TensorBoardLogger class** (`trigor/utils/logger.py`):
+- Interface matching WandbLogger for consistency
+- Methods: `log()`, `log_config()`, `log_histogram()`, `flush()`, `finish()`
+- Graceful degradation if tensorboard not installed
+- Context manager support (`with` statement)
+- Logs to: `{output_dir}/{experiment_id}/tensorboard/`
+
+**2. LMTrainer integration** (`trigor/training/lm_trainer.py`):
+- Initialize TensorBoardLogger if enabled in config
+- Log training metrics every `log_frequency` examples
+- Log validation metrics at end of each epoch
+- Automatic cleanup on training completion
+- **TensorBoard grouping**: Convert `val_` prefix to `val/` for proper grouping in TensorBoard UI
+
+**3. Configuration updates**:
+
+All training configs now include:
+```yaml
+training:
+  tensorboard:
+    enabled: false  # Enable TensorBoard logging (logs to outputs/{id}/tensorboard/)
+```
+
+**4. Dependencies**:
+- Added `tensorboard>=2.10.0` to `requirements.txt`
+- Installed with proxy: `https_proxy=http://127.0.0.1:1091 pip install tensorboard`
+
+### Features
+
+- **Parallel with wandb**: Both can be enabled simultaneously
+- **Auto-degradation**: Disables gracefully if tensorboard not installed
+- **Model-agnostic**: Logs all model output metrics automatically
+- **Proper grouping**: Metrics grouped in TensorBoard UI:
+  - `train/loss`, `train/learning_rate`, `train/policy_loss`, etc.
+  - `val/loss`, `val/policy_loss`, `val/policy_error`, etc.
+
+### Usage
+
+```bash
+# 1. Install tensorboard
+pip install tensorboard
+
+# 2. Enable in config or via CLI
+python train_lm.py configs/training/trigo-value-gpt2.yaml training.tensorboard.enabled=true
+
+# 3. View logs
+tensorboard --logdir=outputs/trigor/{experiment_id}/tensorboard
+# Or view all experiments:
+tensorboard --logdir=outputs/trigor
+```
+
+### Logged Metrics
+
+**Training** (every `log_frequency` examples):
+- `train/loss`, `train/learning_rate`
+- `train/policy_loss`, `train/value_loss`
+- `train/policy_error`, `train/value_mae`, `train/value_mse`
+- All other model outputs
+
+**Validation** (end of each epoch):
+- `val/loss`, `val/policy_loss`, `val/value_loss`
+- `val/policy_error`, `val/value_mae`, etc.
+
+### Comparison: WandB vs TensorBoard
+
+| Feature | WandB | TensorBoard |
+|---------|-------|-------------|
+| Online collaboration | ✅ | ❌ |
+| Local only | ✅ | ✅ |
+| Requires account | ✅ | ❌ |
+| Model upload | ✅ | ❌ |
+| Real-time updates | ✅ | ✅ |
+| Histograms | ✅ | ✅ |
+
+### Notes
+
+- TensorBoard is optional dependency (gracefully disabled if not installed)
+- Simultaneous wandb + tensorboard creates extra disk I/O
+- TensorBoard logs saved locally (watch disk space)
+- Hydra creates additional output directory `outputs/{date}/{time}/` containing Hydra configs (can be ignored/deleted)
+
+</details>
+

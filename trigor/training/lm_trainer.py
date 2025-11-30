@@ -600,7 +600,9 @@ class LMTrainer:
 			self.logger.log(avg_metrics, step=self.global_examples)
 
 		if self.tensorboard_logger:
-			self.tensorboard_logger.log(avg_metrics, step=self.global_examples)
+			# Convert val_ prefix to val/ for TensorBoard grouping
+			tb_metrics = {key.replace('val_', 'val/', 1): value for key, value in avg_metrics.items()}
+			self.tensorboard_logger.log(tb_metrics, step=self.global_examples)
 
 		return avg_metrics
 
