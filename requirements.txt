@@ -11,6 +11,7 @@ omegaconf>=2.3.0
 
 # Experiment Tracking
 wandb>=0.15.0
+tensorboard>=2.10.0
 
 # RL Environment
 gymnasium>=0.29.0

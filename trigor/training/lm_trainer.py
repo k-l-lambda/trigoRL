@@ -131,7 +131,7 @@ class LMTrainer:
 		# Setup TensorBoard logger
 		self.tensorboard_logger = None
 		if config.training.get('tensorboard', {}).get('enabled', False):
-			tensorboard_dir = Path(config.paths.output) / config.id / "tensorboard"
+			tensorboard_dir = Path(config.paths.output) / config.id
 			self.tensorboard_logger = TensorBoardLogger(
 				log_dir=str(tensorboard_dir),
 				enabled=True,
