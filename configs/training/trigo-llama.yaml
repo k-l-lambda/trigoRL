@@ -91,6 +91,9 @@ training:
       - gqa
       - efficient
 
+  tensorboard:
+    enabled: false  # Enable TensorBoard logging (logs to outputs/{id}/tensorboard/)
+
   # Trainer-specific environment variables (only affects trainer operations)
   env: ~
 

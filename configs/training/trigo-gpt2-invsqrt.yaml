@@ -87,6 +87,9 @@ training:
     # name will be set to config.id automatically
     tags: [gpt2, mha, inverse_sqrt]
 
+  tensorboard:
+    enabled: false  # Enable TensorBoard logging (logs to outputs/{id}/tensorboard/)
+
 # Evaluation configuration
 eval:
   eval_frequency: 5

@@ -1,7 +1,7 @@
 """
 Language Model Trainer for attention-based models.
 
-Provides epoch-based training loop with wandb logging, checkpointing,
+Provides epoch-based training loop with wandb/tensorboard logging, checkpointing,
 and learning rate scheduling.
 """
 
@@ -21,7 +21,7 @@ from tqdm import tqdm
 
 from trigor.models import make_model
 from trigor.utils.checkpoint import CheckpointManager
-from trigor.utils.logger import WandbLogger
+from trigor.utils.logger import WandbLogger, TensorBoardLogger
 
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ class LMTrainer:
 	- Epoch-based training with gradient accumulation
 	- Learning rate warmup and cosine annealing
 	- Gradient clipping
-	- Wandb logging
+	- Wandb and TensorBoard logging
 	- Checkpointing (best/latest)
 	- Resume from checkpoint
 	"""
@@ -128,6 +128,18 @@ class LMTrainer:
 			# Watch model (gradients and parameters)
 			self.logger.watch_model(self.model, log='all', log_freq=config.training.log_frequency)
 
+		# Setup TensorBoard logger
+		self.tensorboard_logger = None
+		if config.training.get('tensorboard', {}).get('enabled', False):
+			tensorboard_dir = Path(config.paths.output) / config.id / "tensorboard"
+			self.tensorboard_logger = TensorBoardLogger(
+				log_dir=str(tensorboard_dir),
+				enabled=True,
+			)
+			# Log configuration to TensorBoard
+			if self.tensorboard_logger.enabled:
+				self.tensorboard_logger.log_config(OmegaConf.to_container(config, resolve=True))
+
 		# Setup checkpoint manager
 		checkpoint_dir = Path(config.paths.output) / config.id / "checkpoints"
 		self.checkpoint_mgr = CheckpointManager(
@@ -161,6 +173,7 @@ class LMTrainer:
 		logger.info(f"  Warmup steps: {config.training.warmup_steps}")
 		logger.info(f"  Log frequency: every {config.training.log_frequency} examples")
 		logger.info(f"  Wandb logging: {'enabled' if config.training.wandb.enabled else 'disabled'}")
+		logger.info(f"  TensorBoard logging: {'enabled' if config.training.get('tensorboard', {}).get('enabled', False) else 'disabled'}")
 
 
 	def _set_env_variables(self):
@@ -391,6 +404,9 @@ class LMTrainer:
 			if self.logger:
 				self.logger.finish()
 
+			if self.tensorboard_logger:
+				self.tensorboard_logger.finish()
+
 		logger.info("")
 		logger.info("=" * 80)
 		logger.info("Training Complete")
@@ -489,8 +505,8 @@ class LMTrainer:
 				current_batch_size = batch['input_ids'].size(0)
 				self.global_examples += current_batch_size
 
-				# Log to wandb (based on examples processed)
-				if self.logger and (self.global_examples % self.config.training.log_frequency == 0):
+				# Log to wandb and tensorboard (based on examples processed)
+				if self.global_examples % self.config.training.log_frequency == 0:
 					log_dict = {
 						'train/loss': outputs['loss'].item(),
 						'train/learning_rate': self.optimizer.param_groups[0]['lr'],
@@ -499,7 +515,14 @@ class LMTrainer:
 					for key, value in outputs.items():
 						if key != 'loss':  # Only skip 'loss' itself (already logged)
 							log_dict[f'train/{key}'] = self._extract_scalar(value)
-					self.logger.log(log_dict, step=self.global_examples)
+
+					# Log to wandb
+					if self.logger:
+						self.logger.log(log_dict, step=self.global_examples)
+
+					# Log to TensorBoard
+					if self.tensorboard_logger:
+						self.tensorboard_logger.log(log_dict, step=self.global_examples)
 
 		pbar.close()
 
@@ -572,9 +595,12 @@ class LMTrainer:
 		# Compute averages with 'val_' prefix
 		avg_metrics = {f'val_{key}': value / num_batches for key, value in metric_sums.items()}
 
-		# Log to wandb
+		# Log to wandb and tensorboard
 		if self.logger:
 			self.logger.log(avg_metrics, step=self.global_examples)
+
+		if self.tensorboard_logger:
+			self.tensorboard_logger.log(avg_metrics, step=self.global_examples)
 
 		return avg_metrics
 

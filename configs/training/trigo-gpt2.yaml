@@ -90,6 +90,9 @@ training:
       - mha
       - baseline
 
+  tensorboard:
+    enabled: false  # Enable TensorBoard logging (logs to outputs/{id}/tensorboard/)
+
   # Environment variables (set during trainer initialization, only if not already set)
   # Allows external override via shell: CUDA_VISIBLE_DEVICES=0 python train_lm.py ...
   # Example: env: {CUDA_VISIBLE_DEVICES: "0", OMP_NUM_THREADS: "8"}
