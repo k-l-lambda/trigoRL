@@ -22,6 +22,9 @@ from trigor.models.treeLM import (
 	create_diagonal_evaluated_mask,
 )
 
+# Evaluation mode for ONNX export
+from trigor.models.evaluationLM import EvaluationLM
+
 
 __all__ = [
 	# RL networks
@@ -43,4 +46,6 @@ __all__ = [
 	"TreeLM",
 	"create_causal_evaluated_mask",
 	"create_diagonal_evaluated_mask",
+	# Evaluation mode
+	"EvaluationLM",
 ]

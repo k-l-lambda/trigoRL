@@ -544,6 +544,116 @@ class ONNXExporter:
 			raise
 
 
+	def export_evaluation_mode(
+		self,
+		model: nn.Module,
+		output_path: str,
+		batch_size: int = 1,
+		seq_len: int = 256,
+		dynamic_batch: bool = True,
+		dynamic_seq: bool = True,
+		opset_version: int = 14,
+	) -> None:
+		"""
+		Export model in evaluation mode for value prediction.
+
+		Args:
+		    model: ValueCausalLoss model (will be wrapped in EvaluationLM)
+		    output_path: Path to save ONNX model
+		    batch_size: Batch size for dummy input (default: 1)
+		    seq_len: Sequence length for dummy input (default: 256)
+		    dynamic_batch: Enable dynamic batch size axis (default: True)
+		    dynamic_seq: Enable dynamic sequence length axis (default: True)
+		    opset_version: ONNX opset version (default: 14)
+		"""
+		logger.info("\n" + "=" * 80)
+		logger.info("Exporting to ONNX (Evaluation Mode)")
+		logger.info("=" * 80)
+
+		# Import EvaluationLM
+		from trigor.models.evaluationLM import EvaluationLM
+
+		# Check if model has value_head (must be ValueCausalLoss)
+		if not hasattr(model, 'value_head'):
+			raise ValueError(
+				"--evaluation-mode requires a ValueCausalLoss model with value_head. "
+				f"Got model type: {type(model).__name__}"
+			)
+
+		# Wrap model in EvaluationLM
+		eval_model = EvaluationLM(
+			base_model=model.model,
+			value_head=model.value_head,
+			value_id=getattr(model, 'value_id', 3)
+		)
+		eval_model.eval()
+
+		# Create dummy input
+		vocab_size = self.config.model.config.model_config.config.vocab_size
+		dummy_input_ids = torch.randint(
+			0, vocab_size, (batch_size, seq_len), dtype=torch.long
+		)
+
+		logger.info(f"Dummy input shape: {dummy_input_ids.shape}")
+
+		# Define input/output names
+		input_names = ['input_ids']
+		output_names = ['values']
+
+		# Define dynamic axes
+		dynamic_axes = {}
+		if dynamic_batch or dynamic_seq:
+			axes = {}
+			if dynamic_batch:
+				axes[0] = 'batch_size'
+			if dynamic_seq:
+				axes[1] = 'sequence_length'
+
+			dynamic_axes['input_ids'] = axes
+
+			# Output only has dynamic batch dimension
+			if dynamic_batch:
+				dynamic_axes['values'] = {0: 'batch_size'}
+
+			logger.info(f"Dynamic axes: {dynamic_axes}")
+
+		# Export to ONNX
+		logger.info(f"Exporting to: {output_path}")
+
+		try:
+			import warnings
+			with warnings.catch_warnings():
+				warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+				warnings.filterwarnings("ignore", category=UserWarning)
+
+				torch.onnx.export(
+					eval_model,
+					dummy_input_ids,
+					output_path,
+					input_names=input_names,
+					output_names=output_names,
+					dynamic_axes=dynamic_axes if dynamic_axes else None,
+					opset_version=opset_version,
+					do_constant_folding=True,
+					export_params=True,
+					dynamo=False,
+				)
+
+			logger.info("✓ ONNX export successful!")
+
+			# Get file size
+			file_size_mb = Path(output_path).stat().st_size / (1024 * 1024)
+			logger.info(f"  File size: {file_size_mb:.2f} MB")
+			logger.info(f"  Opset version: {opset_version}")
+			logger.info(f"  Input: {input_names[0]} - shape {list(dummy_input_ids.shape)}")
+			logger.info(f"  Output: {output_names[0]} - shape [batch_size]")
+			logger.info(f"  Mode: Evaluation (value prediction)")
+
+		except Exception as e:
+			logger.error(f"✗ ONNX export failed: {e}")
+			raise
+
+
 	def run(
 		self,
 		checkpoint_name: Optional[str] = None,
@@ -559,6 +669,7 @@ class ONNXExporter:
 		calibration_samples: int = 100,
 		tree_mode: bool = False,
 		prefix_len: int = 128,
+		evaluation_mode: bool = False,
 	) -> Tuple[str, Optional[str]]:
 		"""
 		Run complete export pipeline.
@@ -577,6 +688,7 @@ class ONNXExporter:
 		    calibration_samples: Number of calibration samples for static quantization
 		    tree_mode: Export in tree mode with custom attention masking
 		    prefix_len: Length of prefix for tree mode
+		    evaluation_mode: Export in evaluation mode for value prediction
 
 		Returns:
 		    Tuple of (onnx_path, quantized_path) where quantized_path is None if not quantized
@@ -587,6 +699,8 @@ class ONNXExporter:
 		logger.info(f"Training directory: {self.training_dir}")
 		if tree_mode:
 			logger.info(f"Mode: Tree (custom attention masking)")
+		if evaluation_mode:
+			logger.info(f"Mode: Evaluation (value prediction)")
 
 		# Load model
 		model, checkpoint = self.load_model(checkpoint_name)
@@ -595,7 +709,12 @@ class ONNXExporter:
 		if output_path is None:
 			model_name = self.config.model.config.model_config.type
 			epoch = checkpoint['epoch']
-			suffix = '_tree' if tree_mode else ''
+			if tree_mode:
+				suffix = '_tree'
+			elif evaluation_mode:
+				suffix = '_evaluation'
+			else:
+				suffix = ''
 			output_path = str(self.training_dir / f"{model_name}_ep{epoch:04d}{suffix}.onnx")
 
 		output_path = str(Path(output_path).resolve())
@@ -612,6 +731,16 @@ class ONNXExporter:
 				dynamic_batch=dynamic_batch,
 				dynamic_n=dynamic_seq,
 				dynamic_m=dynamic_seq,
+				opset_version=opset_version,
+			)
+		elif evaluation_mode:
+			self.export_evaluation_mode(
+				model=model,
+				output_path=output_path,
+				batch_size=batch_size,
+				seq_len=seq_len,
+				dynamic_batch=dynamic_batch,
+				dynamic_seq=dynamic_seq,
 				opset_version=opset_version,
 			)
 		else:
@@ -750,6 +879,12 @@ def parse_args():
 		help='Length of prefix for tree mode dummy example (default: 128)'
 	)
 
+	parser.add_argument(
+		'--evaluation-mode',
+		action='store_true',
+		help='Export in evaluation mode for value prediction'
+	)
+
 	return parser.parse_args()
 
 
@@ -776,6 +911,7 @@ def main():
 			calibration_samples=args.calibration_samples,
 			tree_mode=args.tree_mode,
 			prefix_len=args.prefix_len,
+			evaluation_mode=args.evaluation_mode,
 		)
 
 		return 0
