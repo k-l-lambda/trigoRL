@@ -588,6 +588,9 @@ class ONNXExporter:
 		)
 		eval_model.eval()
 
+		# Convert to float32 for ONNX compatibility (bfloat16 not supported)
+		eval_model = eval_model.to(dtype=torch.float32)
+
 		# Create dummy input
 		vocab_size = self.config.model.config.model_config.config.vocab_size
 		dummy_input_ids = torch.randint(
