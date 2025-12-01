@@ -441,6 +441,10 @@ class ONNXExporter:
 		tree_model = TreeLM(model)
 		tree_model.eval()
 
+		# Convert to float32 for ONNX compatibility (bfloat16 not supported by CPU)
+		tree_model = tree_model.to(dtype=torch.float32)
+		logger.info("Converted model to float32 for ONNX compatibility")
+
 		# Create dummy inputs
 		vocab_size = self.config.model.config.model_config.config.vocab_size
 
