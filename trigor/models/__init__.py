@@ -15,9 +15,9 @@ from trigor.models.xlstmCausalLM import xLSTMCausalLM
 from trigor.models.attentionCausalLoss import AttentionCausalLoss
 from trigor.models.valueCausalLoss import ValueCausalLoss
 
-# Evaluation mode for ONNX export
-from trigor.models.evaluationCausalLM import (
-	EvaluationCausalLM,
+# Tree mode for ONNX export
+from trigor.models.treeLM import (
+	TreeLM,
 	create_causal_evaluated_mask,
 	create_diagonal_evaluated_mask,
 )
@@ -39,8 +39,8 @@ __all__ = [
 	# Loss modules
 	"AttentionCausalLoss",
 	"ValueCausalLoss",
-	# Evaluation mode
-	"EvaluationCausalLM",
+	# Tree mode
+	"TreeLM",
 	"create_causal_evaluated_mask",
 	"create_diagonal_evaluated_mask",
 ]

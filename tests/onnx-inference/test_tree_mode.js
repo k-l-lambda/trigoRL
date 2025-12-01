@@ -1,7 +1,7 @@
 /**
- * Node.js Test Suite for Evaluation Mode ONNX Models
+ * Node.js Test Suite for Tree Mode ONNX Models
  *
- * Tests inference with EvaluationCausalLM exported models that accept:
+ * Tests inference with TreeLM exported models that accept:
  * - input_ids: [batch, seq_len]
  * - evaluated_mask: [batch, seq_len, seq_len]
  * - evaluated_ids: [batch, seq_len]
@@ -16,8 +16,8 @@ const fs = require('fs');
 
 // Configuration
 const CONFIG = {
-	// Dynamic evaluation mode model
-	modelPath: path.resolve(__dirname, '../../outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt/GPT2CausalLM_ep0015_evaluation.onnx'),
+	// Dynamic tree mode model
+	modelPath: path.resolve(__dirname, '../../outputs/trigor/20251115-trigo-gpt2-l6-d64-251112-invsqrt/GPT2CausalLM_ep0015_tree.onnx'),
 	vocabSize: 259,
 	// Model supports dynamic dimensions (any prefix_len and eval_len)
 	// Using these values for testing:
@@ -130,7 +130,7 @@ function createEvaluatedIds(batchSize, seqLen, prefixLen, evaluatedPositions = n
  */
 async function testBasicInference(session) {
 	console.log('\n' + '='.repeat(80));
-	console.log('TEST 1: Basic Inference (Evaluation Mode)');
+	console.log('TEST 1: Basic Inference (Tree Mode)');
 	console.log('='.repeat(80));
 
 	const batchSize = 1;
@@ -497,7 +497,7 @@ async function testTreeAttention(session) {
  */
 async function runTests() {
 	console.log('\n' + '='.repeat(80));
-	console.log('ONNX Evaluation Mode Inference Test Suite (Node.js)');
+	console.log('ONNX Tree Mode Inference Test Suite (Node.js)');
 	console.log('='.repeat(80));
 
 	// Check if model file exists

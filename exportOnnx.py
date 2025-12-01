@@ -404,7 +404,7 @@ class ONNXExporter:
 			raise
 
 
-	def export_evaluation_mode(
+	def export_tree_mode(
 		self,
 		model: nn.Module,
 		output_path: str,
@@ -417,10 +417,10 @@ class ONNXExporter:
 		opset_version: int = 14,
 	) -> None:
 		"""
-		Export model in evaluation mode with custom attention masking.
+		Export model in tree mode with custom attention masking.
 
 		Args:
-		    model: PyTorch model to export (will be wrapped in EvaluationCausalLM)
+		    model: PyTorch model to export (will be wrapped in TreeLM)
 		    output_path: Path to save ONNX model
 		    batch_size: Batch size for dummy input (default: 1)
 		    prefix_len: Length of prefix (n) for dummy example (default: 128)
@@ -431,15 +431,15 @@ class ONNXExporter:
 		    opset_version: ONNX opset version (default: 14)
 		"""
 		logger.info("\n" + "=" * 80)
-		logger.info("Exporting to ONNX (Evaluation Mode)")
+		logger.info("Exporting to ONNX (Tree Mode)")
 		logger.info("=" * 80)
 
-		# Import EvaluationCausalLM
-		from trigor.models import EvaluationCausalLM, create_causal_evaluated_mask
+		# Import TreeLM
+		from trigor.models import TreeLM, create_causal_evaluated_mask
 
-		# Wrap model in EvaluationCausalLM
-		evaluation_model = EvaluationCausalLM(model)
-		evaluation_model.eval()
+		# Wrap model in TreeLM
+		tree_model = TreeLM(model)
+		tree_model.eval()
 
 		# Create dummy inputs
 		vocab_size = self.config.model.config.model_config.config.vocab_size
@@ -517,7 +517,7 @@ class ONNXExporter:
 				warnings.filterwarnings("ignore", category=UserWarning)
 
 				torch.onnx.export(
-					evaluation_model,
+					tree_model,
 					(dummy_prefix_ids, dummy_evaluated_ids, dummy_evaluated_mask),
 					output_path,
 					input_names=input_names,
@@ -537,7 +537,7 @@ class ONNXExporter:
 			logger.info(f"  Opset version: {opset_version}")
 			logger.info(f"  Inputs: {', '.join(input_names)}")
 			logger.info(f"  Output: {output_names[0]} - shape [batch, m+1, vocab_size]")
-			logger.info(f"  Mode: Evaluation (n={prefix_len}, m={eval_len} example)")
+			logger.info(f"  Mode: Tree (n={prefix_len}, m={eval_len} example)")
 
 		except Exception as e:
 			logger.error(f"✗ ONNX export failed: {e}")
@@ -557,7 +557,7 @@ class ONNXExporter:
 		quant_method: str = 'dynamic',
 		quant_type: str = 'int8',
 		calibration_samples: int = 100,
-		evaluation_mode: bool = False,
+		tree_mode: bool = False,
 		prefix_len: int = 128,
 	) -> Tuple[str, Optional[str]]:
 		"""
@@ -575,8 +575,8 @@ class ONNXExporter:
 		    quant_method: Quantization method ('dynamic' or 'static')
 		    quant_type: Quantization type ('int8' or 'int4')
 		    calibration_samples: Number of calibration samples for static quantization
-		    evaluation_mode: Export in evaluation mode with custom attention masking
-		    prefix_len: Length of prefix for evaluation mode
+		    tree_mode: Export in tree mode with custom attention masking
+		    prefix_len: Length of prefix for tree mode
 
 		Returns:
 		    Tuple of (onnx_path, quantized_path) where quantized_path is None if not quantized
@@ -585,8 +585,8 @@ class ONNXExporter:
 		logger.info("TrigoRL ONNX Export")
 		logger.info("=" * 80)
 		logger.info(f"Training directory: {self.training_dir}")
-		if evaluation_mode:
-			logger.info(f"Mode: Evaluation (custom attention masking)")
+		if tree_mode:
+			logger.info(f"Mode: Tree (custom attention masking)")
 
 		# Load model
 		model, checkpoint = self.load_model(checkpoint_name)
@@ -595,15 +595,15 @@ class ONNXExporter:
 		if output_path is None:
 			model_name = self.config.model.config.model_config.type
 			epoch = checkpoint['epoch']
-			suffix = '_evaluation' if evaluation_mode else ''
+			suffix = '_tree' if tree_mode else ''
 			output_path = str(self.training_dir / f"{model_name}_ep{epoch:04d}{suffix}.onnx")
 
 		output_path = str(Path(output_path).resolve())
 
 		# Export to ONNX (choose mode)
-		if evaluation_mode:
+		if tree_mode:
 			eval_len = seq_len - prefix_len  # Calculate eval_len from seq_len and prefix_len
-			self.export_evaluation_mode(
+			self.export_tree_mode(
 				model=model,
 				output_path=output_path,
 				batch_size=batch_size,
@@ -738,16 +738,16 @@ def parse_args():
 	)
 
 	parser.add_argument(
-		'--evaluation-mode',
+		'--tree-mode',
 		action='store_true',
-		help='Export in evaluation mode with custom attention masking for probability computation'
+		help='Export in tree mode with custom attention masking for probability computation'
 	)
 
 	parser.add_argument(
 		'--prefix-len',
 		type=int,
 		default=128,
-		help='Length of prefix for evaluation mode dummy example (default: 128)'
+		help='Length of prefix for tree mode dummy example (default: 128)'
 	)
 
 	return parser.parse_args()
@@ -774,7 +774,7 @@ def main():
 			quant_method=args.quant_method,
 			quant_type=args.quant_type,
 			calibration_samples=args.calibration_samples,
-			evaluation_mode=args.evaluation_mode,
+			tree_mode=args.tree_mode,
 			prefix_len=args.prefix_len,
 		)
 

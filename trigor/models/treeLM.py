@@ -1,7 +1,7 @@
 """
-Evaluation Causal Language Model for ONNX Export.
+Tree Language Model for ONNX Export.
 
-This model wraps a base CausalLM model to support evaluation mode inference where:
+This model wraps a base CausalLM model to support tree-mode inference where:
 1. Input is prefix_ids (context) + evaluated_ids (targets to evaluate)
 2. Causal attention mask is applied by default
 3. Custom evaluated_mask can override attention in the evaluated region (bottom-right m×m)
@@ -19,10 +19,10 @@ from omegaconf import DictConfig
 from .registry import register_model
 
 
-@register_model("evaluation")
-class EvaluationCausalLM(nn.Module):
+@register_model("tree")
+class TreeLM(nn.Module):
 	"""
-	Evaluation mode wrapper for causal language models.
+	Tree mode wrapper for causal language models.
 
 	This model is designed for ONNX export and supports flexible attention masking
 	for computing probabilities over evaluation sequences given a prefix context.
@@ -51,7 +51,7 @@ class EvaluationCausalLM(nn.Module):
 		evaluated_mask: torch.Tensor,
 	) -> torch.Tensor:
 		"""
-		Forward pass with evaluation mode masking.
+		Forward pass with tree mode masking.
 
 		Args:
 		    prefix_ids: Prefix token IDs [batch_size, n]
@@ -119,46 +119,46 @@ class EvaluationCausalLM(nn.Module):
 			base_info = {}
 
 		return {
-			'model_class': 'EvaluationCausalLM',
+			'model_class': 'TreeLM',
 			'base_model': base_info.get('model_type', 'unknown'),
-			'mode': 'evaluation',
+			'mode': 'tree',
 			'onnx_compatible': True,
 		}
 
 
 	@classmethod
-	def from_base_model(cls, base_model: nn.Module) -> 'EvaluationCausalLM':
+	def from_base_model(cls, base_model: nn.Module) -> 'TreeLM':
 		"""
-		Create EvaluationCausalLM from a base CausalLM model.
+		Create TreeLM from a base CausalLM model.
 
 		Args:
 		    base_model: Instance of GPT2CausalLM, LlamaCausalLM, RwkvCausalLM, xLSTMCausalLM,
 		                or AttentionCausalLoss wrapper
 
 		Returns:
-		    EvaluationCausalLM instance
+		    TreeLM instance
 		"""
 		return cls(base_model)
 
 
 	@classmethod
-	def from_config(cls, config: Union[Dict, DictConfig], base_model: nn.Module) -> 'EvaluationCausalLM':
+	def from_config(cls, config: Union[Dict, DictConfig], base_model: nn.Module) -> 'TreeLM':
 		"""
-		Create EvaluationCausalLM with configuration.
+		Create TreeLM with configuration.
 
 		Args:
 		    config: Configuration dict (currently unused, for compatibility)
 		    base_model: Base CausalLM model instance
 
 		Returns:
-		    EvaluationCausalLM instance
+		    TreeLM instance
 		"""
 		return cls(base_model)
 
 
 	def __repr__(self) -> str:
 		base_repr = repr(self.model) if self.model else "None"
-		return f"EvaluationCausalLM(\n  base_model={base_repr}\n)"
+		return f"TreeLM(\n  base_model={base_repr}\n)"
 
 
 def create_causal_evaluated_mask(
