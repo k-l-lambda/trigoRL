@@ -68,6 +68,19 @@ class TreeLM(nn.Module):
 		# Concatenate prefix and evaluated tokens to form full input sequence
 		input_ids = torch.cat([prefix_ids, evaluated_ids], dim=1)  # [batch, n+m]
 
+		# CRITICAL: Calculate position_ids based on tree structure
+		# Each evaluated token's position depends on how many tokens it can attend to
+		# evaluated_mask[i, :].sum() = number of evaluated tokens that token i can see
+		# Total visible tokens = n (prefix) + evaluated_mask[i, :].sum() (evaluated)
+		# Position = total_visible - 1 (because position is 0-indexed)
+		prefix_positions = torch.arange(n, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)  # [batch, n]
+
+		# For each evaluated token, compute: position = n + mask_row_sum - 1
+		mask_row_sums = evaluated_mask.sum(dim=2)  # [batch, m] - sum over last dimension
+		evaluated_positions = (n + mask_row_sums - 1).long()  # [batch, m] - convert to long for embedding
+
+		position_ids = torch.cat([prefix_positions, evaluated_positions], dim=1)  # [batch, n+m]
+
 		# Build base causal mask for entire sequence (n+m) × (n+m)
 		total_len = n + m
 		causal_mask = torch.tril(
@@ -90,8 +103,8 @@ class TreeLM(nn.Module):
 		else:
 			base = self.model
 
-		# Forward pass with custom attention mask
-		model_outputs = base(input_ids, attention_mask=attention_mask)
+		# Forward pass with custom attention mask and position_ids
+		model_outputs = base(input_ids, attention_mask=attention_mask, position_ids=position_ids)
 
 		# Extract logits
 		if hasattr(model_outputs, 'logits'):
