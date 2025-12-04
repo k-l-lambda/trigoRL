@@ -283,5 +283,6 @@ The following components need to be built for the RL training framework:
 1. Update `agentlog.md` when a mini-milestone is accomplished.
 1. Use camel case for .py file naming.
 1. Use multiple space lines in code to separate sections according to logic levels. Use 2 lines for interval between top-level code blocks.
+1. Write C++ code in modern style, with curly braces on standalone lines and tab indentation.
 1. Place new .md documents in `./docs/`, documents in English always.
 1. Following further instuctions in `CLAUDE.local.md` if present.
