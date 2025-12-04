@@ -9893,3 +9893,187 @@ Python and C++ tokenizers fully compatible.
 - Validate against Python inference
 
 </details>
+
+
+## 2025/12/04
+
+> Continue Phase 1 Task 1.4: ONNX Model Inference implementation.
+> Create SharedModelInferencer for C++ inference with shared architecture models.
+
+<details>
+<summary>Phase 1 Task 1.4 Complete - ONNX Model Inference with Shared Architecture</summary>
+
+### Objective
+
+Implement C++ ONNX Runtime inferencer for shared architecture models (base + policy_head + value_head) with full integration testing.
+
+### Implementation
+
+**Created** `/home/camus/work/trigo.cpp/include/shared_model_inferencer.hpp` (152 lines)
+
+Modern C++ interface for shared model inference:
+```cpp
+class SharedModelInferencer
+{
+public:
+	SharedModelInferencer(
+		const std::string& base_model_path,
+		const std::string& policy_head_path,
+		const std::string& value_head_path,
+		bool use_gpu = true,
+		int device_id = 0
+	);
+
+	// TreeLM mode: evaluate multiple moves given prefix
+	std::vector<float> policy_inference(
+		const std::vector<int64_t>& prefix_ids,
+		const std::vector<int64_t>& evaluated_ids,
+		const std::vector<float>& evaluated_mask,
+		int batch_size, int prefix_len, int eval_len
+	);
+
+	// EvaluationLM mode: predict game outcome value
+	std::vector<float> value_inference(
+		const std::vector<int64_t>& input_ids,
+		int batch_size, int seq_len,
+		int value_token_id = 3
+	);
+
+	void print_model_info() const;
+};
+```
+
+**Created** `/home/camus/work/trigo.cpp/src/shared_model_inferencer.cpp` (453 lines)
+
+**Key Features**:
+
+1. **ONNX Runtime Integration**:
+   - Automatic CUDA provider detection and fallback to CPU
+   - Graph optimization enabled
+   - Multi-threaded inference (4 threads)
+   - Dynamic RPATH for library loading
+
+2. **Policy Inference** (TreeLM mode):
+   - Loads base model, runs with tree attention mask
+   - Extracts hidden states [batch, n+m, hidden_dim]
+   - Runs policy head for output projection
+   - Returns logits [batch, m+1, vocab_size]
+
+3. **Value Inference** (EvaluationLM mode):
+   - Appends VALUE token (id=3) to input
+   - Splits into prefix (128) + evaluated regions
+   - Creates causal mask for evaluated region
+   - Runs base model → extract last hidden state → run value head
+   - Returns values [batch]
+
+4. **Helper Functions**:
+   - `create_causal_mask()`: Lower triangular matrix for autoregressive attention
+   - `expand_mask_to_batch()`: Batch dimension expansion
+
+**Created** `/home/camus/work/trigo.cpp/tests/test_shared_model_inferencer.cpp` (278 lines)
+
+**Comprehensive Test Suite** (4 tests):
+
+1. **test_model_loading()**: Verify all 3 models load successfully
+2. **test_policy_inference()**: 
+   - Input: prefix_ids [1, 128], evaluated_ids [1, 64], mask [1, 64, 64]
+   - Output: logits [1, 65, 128]
+   - Validates: shape correctness, finite values
+3. **test_value_inference()**:
+   - Input: input_ids [1, 191] (128+64-1, VALUE token makes 192)
+   - Output: values [1]
+   - Validates: shape, finite, reasonable range
+4. **test_tokenizer_integration()**:
+   - Tokenizes TGN game: "B3 000\nW5 abc\nB9 xyz"
+   - Runs value inference on tokenized input
+   - End-to-end validation
+
+**Test Results**:
+```
+✅ ALL TESTS PASSED!
+✓ Model loading test passed
+✓ Policy inference test passed  
+✓ Value inference test passed
+✓ Tokenizer + Inferencer integration test passed
+```
+
+**Sample Output**:
+```
+[Base Model]
+  Inputs: prefix_ids [1, 128], evaluated_ids [1, 64], evaluated_mask [1, 64, 64]
+  Outputs: hidden_states [1, 192, 64]
+
+Policy logits sample: [-0.064, -0.272, 0.059, ...]
+Value prediction: 0.853115
+```
+
+### Build Integration
+
+**Updated** `CMakeLists.txt`:
+- Added `src/shared_model_inferencer.cpp` to sources
+- Created `test_shared_model_inferencer` executable with ONNX Runtime linking
+
+**Build Commands**:
+```bash
+cd /home/camus/work/trigo.cpp/build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j4
+./test_shared_model_inferencer
+```
+
+### Technical Notes
+
+**ONNX Model Requirements**:
+- Test models exported with fixed dimensions (batch=1, n=128, m=64)
+- Production models should use `--dynamic-batch --dynamic-seq` for flexibility
+- Policy head in test export takes full hidden_states [n+m, hidden_dim]
+- Real production export should optimize by only passing [m+1, hidden_dim]
+
+**Memory Layout**:
+- All tensors use row-major layout (C-style)
+- Float32 precision throughout
+- CPU memory with automatic GPU transfer when CUDA enabled
+
+**Error Handling**:
+- ONNX Runtime exceptions caught and wrapped
+- Dimension validation at runtime
+- Graceful fallback from GPU to CPU if CUDA unavailable
+
+### Progress
+
+**Phase 1 Complete**: 4 / 4 tasks
+- ✅ Task 1.1: Build System Setup (Days 1-2)
+- ✅ Task 1.2: Shared Model Architecture Export (Days 3-4)
+- ✅ Task 1.3: TGN Tokenizer Implementation (Days 5-6)
+- ✅ Task 1.4: ONNX Model Inference (Days 7-10)
+
+**Next**: Phase 2 - MCTS Implementation
+- Task 2.1: Trigo Game Engine C++ port (Days 11-20)
+- Task 2.2: Prefix Tree Builder (Days 21-24)
+- Task 2.3: MCTS Tree Structure (Days 25-30)
+
+### Files Created
+
+**trigo.cpp**:
+- `include/shared_model_inferencer.hpp` (152 lines)
+- `src/shared_model_inferencer.cpp` (453 lines)
+- `tests/test_shared_model_inferencer.cpp` (278 lines)
+
+### Files Modified
+
+**trigo.cpp**:
+- `CMakeLists.txt`: Added inferencer sources and test target
+
+### Build Artifacts
+
+- `build/libtrigo_inference.so`: Shared library with tokenizer + inferencer
+- `build/test_shared_model_inferencer`: Test executable
+
+### System Configuration
+
+- GPU: NVIDIA GeForce RTX 3090 (24GB, Compute 8.6)
+- CUDA: 11.8.89
+- ONNX Runtime: v1.17.0 GPU
+- Compiler: GCC 11.4.0, C++17
+
+</details>
