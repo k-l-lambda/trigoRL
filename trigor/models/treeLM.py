@@ -94,6 +94,16 @@ class TreeLM(nn.Module):
 		# This replaces the default causal pattern in the evaluated region
 		combined_mask[:, n:, n:] = evaluated_mask  # [batch, m, m] overwrites tail
 
+		# Convert 0/1 mask to log-space format (0 = attend, -inf = mask)
+		# This is the correct format expected by GPT2: mask is added to attention weights
+		# Reference: transformers/models/gpt2/modeling_gpt2.py
+		mask_value = -float("inf")
+		combined_mask = torch.where(
+			combined_mask == 1.0,
+			torch.tensor(0.0, dtype=torch.float32, device=input_ids.device),
+			torch.tensor(mask_value, dtype=torch.float32, device=input_ids.device)
+		)
+
 		# Convert to 4D attention mask: [batch_size, 1, seq_len, seq_len]
 		attention_mask = combined_mask.unsqueeze(1)
 

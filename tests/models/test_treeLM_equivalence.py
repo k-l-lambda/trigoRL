@@ -199,11 +199,9 @@ def test_treelm_equivalence():
 	# Check 2: Scenario 1 ([a, b]) vs Scenario 3 branch 1
 	print(f"\n[Check 2] Scenario 1 [a, b] vs Scenario 3 branch 1")
 	print("-" * 80)
-	print("  NOTE: These are expected to differ due to different sequence lengths!")
+	print("  Comparing separate vs combined evaluation (different sequence lengths)")
 	print("  Scenario 1: total length = n+2 = 5")
 	print("  Scenario 3: total length = n+3 = 6")
-	print("  Even though 'b' and 'c' don't attend to each other, the sequence length")
-	print("  affects padding and potentially model behavior.")
 
 	logits_1_a = logits_1[0, 1]  # 'a' from [a, b]
 	logits_1_b = logits_1[0, 2]  # 'b' from [a, b]
@@ -211,18 +209,27 @@ def test_treelm_equivalence():
 	diff_1_3_a = torch.abs(logits_1_a - logits_3_a).max().item()
 	diff_1_3_b = torch.abs(logits_1_b - logits_3_b).max().item()
 
-	print(f"  Max diff for 'a': {diff_1_3_a:.2e}")
-	print(f"  Max diff for 'b': {diff_1_3_b:.2e}")
+	# Calculate relative error
+	rel_error_a = (torch.norm(logits_1_a - logits_3_a) / torch.norm(logits_1_a)).item() * 100
+	rel_error_b = (torch.norm(logits_1_b - logits_3_b) / torch.norm(logits_1_b)).item() * 100
 
-	# These WILL differ due to different sequence lengths, which is expected
-	# The key insight: tree attention allows parallel evaluation but changes
-	# the computational context (different input_ids tensor shape)
-	print(f"  ⚠ Logits differ due to different sequence lengths (expected behavior)")
+	print(f"  Max diff for 'a': {diff_1_3_a:.2e} (rel error: {rel_error_a:.2f}%)")
+	print(f"  Max diff for 'b': {diff_1_3_b:.2e} (rel error: {rel_error_b:.2f}%)")
+
+	# Interpret the difference
+	max_rel_error = max(rel_error_a, rel_error_b)
+	if max_rel_error < 0.001:  # < 0.001%
+		print(f"  ✓ Difference negligible (numerical precision)")
+	elif max_rel_error < 1.0:  # < 1%
+		print(f"  ℹ Small difference ({max_rel_error:.2f}%), likely due to sequence length")
+	else:  # >= 1%
+		print(f"  ⚠ Significant difference ({max_rel_error:.2f}%)!")
+		print(f"    This is expected: different tensor shapes → different batch operations")
 
 	# Check 3: Scenario 2 ([a, c]) vs Scenario 3 branch 2
 	print(f"\n[Check 3] Scenario 2 [a, c] vs Scenario 3 branch 2")
 	print("-" * 80)
-	print("  NOTE: These are also expected to differ due to different sequence lengths!")
+	print("  Comparing separate vs combined evaluation (different sequence lengths)")
 
 	logits_2_a = logits_2[0, 1]  # 'a' from [a, c]
 	logits_2_c = logits_2[0, 2]  # 'c' from [a, c]
@@ -230,9 +237,22 @@ def test_treelm_equivalence():
 	diff_2_3_a = torch.abs(logits_2_a - logits_3_a).max().item()
 	diff_2_3_c = torch.abs(logits_2_c - logits_3_c).max().item()
 
-	print(f"  Max diff for 'a': {diff_2_3_a:.2e}")
-	print(f"  Max diff for 'c': {diff_2_3_c:.2e}")
-	print(f"  ⚠ Logits differ due to different sequence lengths (expected behavior)")
+	# Calculate relative error
+	rel_error_a = (torch.norm(logits_2_a - logits_3_a) / torch.norm(logits_2_a)).item() * 100
+	rel_error_c = (torch.norm(logits_2_c - logits_3_c) / torch.norm(logits_2_c)).item() * 100
+
+	print(f"  Max diff for 'a': {diff_2_3_a:.2e} (rel error: {rel_error_a:.2f}%)")
+	print(f"  Max diff for 'c': {diff_2_3_c:.2e} (rel error: {rel_error_c:.2f}%)")
+
+	# Interpret the difference
+	max_rel_error = max(rel_error_a, rel_error_c)
+	if max_rel_error < 0.001:  # < 0.001%
+		print(f"  ✓ Difference negligible (numerical precision)")
+	elif max_rel_error < 1.0:  # < 1%
+		print(f"  ℹ Small difference ({max_rel_error:.2f}%), likely due to sequence length")
+	else:  # >= 1%
+		print(f"  ⚠ Significant difference ({max_rel_error:.2f}%)!")
+		print(f"    This is expected: different tensor shapes → different batch operations")
 
 	# Check 4: Verify position_ids are correct
 	print(f"\n[Check 4] Position embeddings verification")

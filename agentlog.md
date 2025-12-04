@@ -9445,3 +9445,186 @@ When test showed "sequence length matters" → should have immediately suspected
 📝 **TODO for next retraining**: Fix mask format
 
 </details>
+
+---
+
+## COMPREHENSIVE MASK FIX - Full Implementation
+
+> Complete fix of attention mask format in both training and inference code
+
+<details>
+<summary>Attention mask format fix</summary>
+
+### Decision: Full Fix Implementation
+
+User is correct - models trained with incorrect causal mask have learned distorted attention patterns. Must fix completely and retrain.
+
+### Changes Made
+
+#### 1. Training Code Fix (`trigor/models/treeLM.py`)
+
+**Location**: Lines 97-105
+
+**Before**:
+```python
+combined_mask[:, n:, n:] = evaluated_mask
+attention_mask = combined_mask.unsqueeze(1)  # ← Wrong format!
+```
+
+**After**:
+```python
+combined_mask[:, n:, n:] = evaluated_mask
+
+# Convert 0/1 mask to log-space format (0 = attend, -inf = mask)
+# This is the correct format expected by GPT2: mask is added to attention weights
+# Reference: transformers/models/gpt2/modeling_gpt2.py
+mask_value = -float("inf")
+combined_mask = torch.where(
+    combined_mask == 1.0,
+    torch.tensor(0.0, dtype=torch.float32, device=input_ids.device),
+    torch.tensor(mask_value, dtype=torch.float32, device=input_ids.device)
+)
+
+attention_mask = combined_mask.unsqueeze(1)
+```
+
+#### 2. Inference Code Fix (`trigo-web/inc/trigoTreeAgent.ts`)
+
+**Location**: Lines 158-178
+
+**Before**:
+```typescript
+const mask = new Array(total * total).fill(0);
+for (let i = 0; i < total; i++) {
+    let p = i;
+    while (p !== null) {
+        mask[i * total + p] = 1;  // ← Wrong format!
+        p = parent[p]!;
+    }
+}
+return { evaluatedIds, mask, moveToLeafPos, parent };
+```
+
+**After**:
+```typescript
+// First build binary mask (1 = attend, 0 = mask)
+const binaryMask = new Array(total * total).fill(0);
+for (let i = 0; i < total; i++) {
+    let p = i;
+    while (p !== null) {
+        binaryMask[i * total + p] = 1;
+        p = parent[p]!;
+    }
+}
+
+// Convert to log-space format (0 = attend, -inf = mask)
+// This matches GPT2 expectation: mask is added to attention weights
+const MASK_VALUE = -10000; // Approximation of -inf for float32
+const mask = new Float32Array(total * total);
+for (let i = 0; i < total * total; i++) {
+    mask[i] = binaryMask[i] === 1 ? 0 : MASK_VALUE;
+}
+
+return { evaluatedIds, mask: Array.from(mask), moveToLeafPos, parent };
+```
+
+### Why -10000 in TypeScript vs -float("inf") in Python?
+
+- **Python**: Uses `-float("inf")` which is true -infinity
+- **TypeScript**: Uses `-10000` as approximation because:
+  - JavaScript numbers are float64, but ONNX uses float32
+  - `-10000` is large enough: `exp(-10000) ≈ 0`
+  - Matches the practical effect of -infinity after softmax
+  - Avoids potential NaN issues in ONNX Runtime
+
+### Verification
+
+#### Test Cases Updated
+
+All test cases in `tests/models/test_token_reordering_simple.py` now use correct `-float("inf")`:
+
+```python
+mask_value = -float("inf")
+attention_mask = torch.tensor([
+    [[0, mask_value],  # 0 = attend, -inf = mask
+     [0, 0]]
+], dtype=torch.float32)
+```
+
+**Test Results**: ✅ All 4 tests pass
+
+#### New Test Created
+
+Created `tests/models/test_treeLM_mask_format.py` to verify:
+1. TreeLM correctly converts mask to log-space format
+2. Masked positions actually block attention
+
+### Impact Analysis
+
+#### Before Fix
+
+**Attention mechanism behavior**:
+```python
+# With 0/1 mask (WRONG)
+attn_weights = raw_attention + mask
+# Position with mask=1: attn_weight + 1  → artificially boosted!
+# Position with mask=0: attn_weight + 0  → still attends!
+```
+
+**Result**: Causal mask completely broken, model learns wrong attention patterns
+
+#### After Fix
+
+**Attention mechanism behavior**:
+```python
+# With 0/-inf mask (CORRECT)
+attn_weights = raw_attention + mask
+# Position with mask=0:    attn_weight + 0      → normal attention
+# Position with mask=-inf: attn_weight + (-inf) → softmax = 0
+```
+
+**Result**: Causal mask works correctly, model will learn proper attention patterns
+
+### Files Modified
+
+1. **`trigor/models/treeLM.py:97-105`** - Training code mask conversion
+2. **`trigo-web/inc/trigoTreeAgent.ts:158-178`** - Inference code mask conversion
+3. **`tests/models/test_token_reordering_simple.py`** - All masks use `-float("inf")`
+4. **`tests/models/test_treeLM_mask_format.py`** - New test for mask conversion
+
+### Next Steps
+
+- [ ] **CRITICAL**: Delete all old model checkpoints (trained with wrong mask)
+- [ ] Retrain models from scratch with correct mask format
+- [ ] Verify ONNX export preserves mask format correctly
+- [ ] Run selfplay with new models to verify everything works
+- [ ] Generate new training data with correct mask
+
+### Debugging Note
+
+Initial selfPlayGames error was due to incorrect array initialization:
+```typescript
+// WRONG: const mask = new Array(total * total);
+// RIGHT: const mask = new Float32Array(total * total);
+```
+
+Fixed by using `Float32Array` which is properly pre-allocated.
+
+### Why This Fix Matters
+
+**Core principle**: Transformer attention is controlled by two things:
+1. **position_ids** - tells model which position each token represents
+2. **attention_mask** - tells model which positions can attend to which
+
+With broken mask, the causal structure was destroyed. Models trained with broken mask have learned **arbitrary attention patterns** that don't respect causality. These models are fundamentally broken and must be discarded.
+
+### Status
+
+✅ **Training code fixed**: treeLM.py uses log-space mask
+✅ **Inference code fixed**: trigoTreeAgent.ts uses log-space mask
+✅ **Tests updated**: All test cases use correct format
+✅ **Test verified**: New test confirms mask conversion works
+⚠️ **Old models invalid**: Must delete and retrain
+📝 **Next**: Retrain all models from scratch
+
+</details>

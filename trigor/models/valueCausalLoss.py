@@ -363,6 +363,16 @@ class ValueCausalLoss(nn.Module):
 				attention_mask[batch_idx, value_pos, :] = 0
 				attention_mask[batch_idx, value_pos, :move_end_pos+1] = 1
 
+		# Convert 0/1 mask to log-space format (0 = attend, -inf = mask)
+		# This is the correct format expected by transformers: mask is added to attention weights
+		# Reference: transformers/models/gpt2/modeling_gpt2.py
+		mask_value = -float("inf")
+		attention_mask = torch.where(
+			attention_mask == 1.0,
+			torch.tensor(0.0, dtype=model_dtype, device=device),
+			torch.tensor(mask_value, dtype=model_dtype, device=device)
+		)
+
 		# Add head dimension: [batch, 1, seq_len, seq_len]
 		return attention_mask.unsqueeze(1)
 
