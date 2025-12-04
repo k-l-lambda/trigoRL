@@ -9326,3 +9326,122 @@ PYTHONPATH=/home/camus/work/trigoRL:$PYTHONPATH python tests/models/test_positio
 ✅ TreeLM implementation confirmed correct
 
 </details>
+
+---
+
+## 2025/12/04
+
+
+## CRITICAL CORRECTION - Attention Mask Format Error
+
+<details>
+<summary>Previous conclusion about "sequence length dependency" was WRONG due to mask format bug</summary>
+
+### Critical Bug Discovery
+
+**Previous WRONG conclusion** (agentlog.md line 9303-9305):
+> "Sequence length dependency is fundamental: Not a bug, but inherent to how transformers work"
+
+This conclusion was **COMPLETELY WRONG** and violated transformer core principles!
+
+### Root Cause: Incorrect Attention Mask Format
+
+Both the test code and production code were using **incorrect mask format**:
+
+**What we were doing (WRONG)**:
+```python
+# Using 0/1 binary format
+attention_mask = torch.tensor([
+    [[1, 0],   # 1 = attend, 0 = mask
+     [1, 1]]
+], dtype=torch.float32)
+```
+
+**What GPT2 expects (CORRECT)**:
+```python
+# Using log-space format
+mask_value = -float("inf")
+attention_mask = torch.tensor([
+    [[0, mask_value],   # 0 = attend, -inf = mask
+     [0, 0]]
+], dtype=torch.float32)
+```
+
+### Why This Matters
+
+GPT2 **adds** mask to attention weights (not multiply):
+```python
+# From transformers/models/gpt2/modeling_gpt2.py
+attn_weights = attn_weights + causal_mask  # ← ADDITION!
+attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+```
+
+**Impact of wrong format**:
+- `mask[i,j] = 1`: `attn_weight + 1` → artificially boosts attention!
+- `mask[i,j] = 0`: `attn_weight + 0` → allows attention instead of blocking!
+
+### Test Results After Fix
+
+Changed all masks in `test_token_reordering_simple.py` to use `-float("inf")`:
+
+**All tests NOW PASS**:
+- ✅ Test 1 (Simple Reordering): max_diff = 0
+- ✅ Test 2 (Long Sequence Shuffling): max_diff = 2.1e-7 (float precision)
+- ✅ Test 3 (Masked Token Insertion): max_diff = 1.5e-7 ← **NOW PASSES!**
+- ✅ Test 4 (Masked Token Position): max_diff = 8.9e-8
+
+### Correct Conclusion
+
+✅ **Transformers ARE fully order-invariant with fixed position_ids**
+✅ **Fully masked tokens are truly invisible**
+✅ **Sequence length does NOT affect results** (only position_ids and mask matter)
+
+The previous conclusion that "sequence length dependency is fundamental" was caused by mask format bug, not transformer architecture!
+
+### Why We Didn't Fix Production Code
+
+**Both training and inference use the same wrong format**:
+- `trigor/models/treeLM.py:95` - uses 0/1 format
+- `trigo-web/inc/trigoTreeAgent.ts:158-166` - uses 0/1 format
+
+**Decision**: Keep current format (pragmatic choice)
+- Models trained 40+ epochs with this format
+- Training/inference are consistent
+- Retraining cost too high for current stage
+- Document as known deviation
+
+**For future retraining**: MUST fix mask format in both places!
+
+### Key Lesson
+
+**When test results violate core principles → suspect implementation bug, not theory!**
+
+Transformer core principle: With correct position_ids and attention_mask, model should be completely order-invariant and sequence-length-invariant.
+
+When test showed "sequence length matters" → should have immediately suspected mask format bug, not accepted it as "fundamental property"!
+
+### Checklist for Future Model Retraining
+
+- [ ] Update `trigor/models/treeLM.py` to convert mask: `1→0, 0→-inf`
+- [ ] Update `trigo-web/inc/trigoTreeAgent.ts` mask generation to match
+- [ ] Verify ONNX export preserves mask format correctly
+- [ ] Re-run all transformer invariance tests
+
+### Files Modified
+
+- **`tests/models/test_token_reordering_simple.py`** - All masks corrected to use `-float("inf")`
+
+### References
+
+- HuggingFace transformers: `modeling_gpt2.py` line ~40
+- HuggingFace transformers: `modeling_attn_mask_utils.py` `_expand_mask()`
+
+### Status
+
+✅ **Bug identified and understood**
+✅ **Test corrected with proper mask format**
+✅ **Wrong conclusion corrected**
+⚠️ **Production code keeps 0/1 format** (consistent, documented deviation)
+📝 **TODO for next retraining**: Fix mask format
+
+</details>

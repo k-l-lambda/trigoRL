@@ -62,9 +62,11 @@ def test_simple_reordering(dtype):
 	# Attention mask for A: position-based causal
 	# Index 0 (a@pos0) attends to pos0 only → index 0
 	# Index 1 (b@pos1) attends to pos0,1 → indices 0,1
+	# NOTE: Use log-space mask (0 = attend, -inf = mask) - consistent with transformers
+	mask_value = -float("inf")
 	attention_mask_A = torch.tensor([
-		[[1, 0],  # a@pos0 (index 0) attends to itself only
-		 [1, 1]]  # b@pos1 (index 1) attends to both
+		[[0, mask_value],  # a@pos0 (index 0) attends to itself only
+		 [0, 0]]  # b@pos1 (index 1) attends to both
 	], dtype=torch.float32).unsqueeze(1)  # Add head dimension
 
 	# Scenario B: [b, a] + positions [1, 0]
@@ -73,9 +75,10 @@ def test_simple_reordering(dtype):
 	# Attention mask for B: position-based causal (reordered)
 	# Index 0 (b@pos1) attends to pos0,1 → indices 0,1
 	# Index 1 (a@pos0) attends to pos0 only → index 1
+	# NOTE: Use log-space mask (0 = attend, -inf = mask)
 	attention_mask_B = torch.tensor([
-		[[1, 1],  # b@pos1 (index 0) attends to both (itself and a@pos0)
-		 [0, 1]]  # a@pos0 (index 1) attends to itself only
+		[[0, 0],  # b@pos1 (index 0) attends to both (itself and a@pos0)
+		 [mask_value, 0]]  # a@pos0 (index 1) attends to itself only
 	], dtype=torch.float32).unsqueeze(1)  # Add head dimension
 
 	with torch.no_grad():
@@ -129,7 +132,11 @@ def test_long_sequence_shuffling(dtype):
 	input_ids_A = torch.tensor([[a, b, c, d, e, f, g]], dtype=torch.long)
 	position_ids_A = torch.tensor([[0, 1, 2, 3, 4, 5, 6]], dtype=torch.long)
 	# Attention mask A: standard causal (position i attends to positions 0..i)
+	# NOTE: Use log-space mask (0 = attend, -inf = mask) - consistent with transformers
+	mask_value = -float("inf")
 	attention_mask_A = torch.tril(torch.ones(7, 7, dtype=torch.float32)).unsqueeze(0).unsqueeze(0)
+	# Convert 0/1 to 0/-inf format
+	attention_mask_A = torch.where(attention_mask_A == 1, torch.tensor(0.0), torch.tensor(mask_value))
 
 	# Scenario B: shuffled order [g,d,b,f,a,c,e]
 	# Positions:                  [6,3,1,5,0,2,4]
@@ -147,14 +154,15 @@ def test_long_sequence_shuffling(dtype):
 	# Index 6 (e@pos4) → attends to pos 0,1,2,3,4 → indices 4,2,5,1,6
 
 	# Build attention mask for B based on position relationships
-	attention_mask_B = torch.zeros(7, 7, dtype=torch.float32)
+	# NOTE: Use log-space mask (0 = attend, -inf = mask) - consistent with transformers
+	attention_mask_B = torch.full((7, 7), mask_value, dtype=torch.float32)
 	pos_to_idx_B = {6: 0, 3: 1, 1: 2, 5: 3, 0: 4, 2: 5, 4: 6}  # position → index mapping
 	for idx in range(7):
 		pos = position_ids_B[0, idx].item()
 		# This token at position 'pos' should attend to all positions 0..pos
 		for target_pos in range(pos + 1):
 			target_idx = pos_to_idx_B[target_pos]
-			attention_mask_B[idx, target_idx] = 1
+			attention_mask_B[idx, target_idx] = 0.0  # Can attend
 
 	attention_mask_B = attention_mask_B.unsqueeze(0).unsqueeze(0)
 
@@ -221,6 +229,7 @@ def test_masked_token_insertion(dtype):
 
 	a, b = 40, 50
 	ZERO = 0  # Masked token
+	mask_value = -float("inf")
 
 	# Scenario A: [a, b] without masked token
 	input_ids_A = torch.tensor([[a, b]], dtype=torch.long)
@@ -229,9 +238,10 @@ def test_masked_token_insertion(dtype):
 	# Index 0 (a@pos0) attends to pos0 → index 0
 	# Index 1 (b@pos2) attends to pos0,1,2 → indices 0,1 (but index 1 doesn't exist, so just 0)
 	# Actually, b@pos2 should attend to pos0,2 → indices 0,1
+	# NOTE: Use log-space mask (0 = attend, -inf = mask) - consistent with transformers
 	attention_mask_A = torch.tensor([
-		[[1, 0],  # a@pos0 attends to itself
-		 [1, 1]]  # b@pos2 attends to both a@pos0 and itself
+		[[0, mask_value],  # a@pos0 attends to itself
+		 [0, 0]]  # b@pos2 attends to both a@pos0 and itself
 	], dtype=torch.float32).unsqueeze(1)
 
 	# Scenario B: [a, ZERO, b] with ZERO fully masked at position 1
@@ -241,10 +251,11 @@ def test_masked_token_insertion(dtype):
 	# Index 0 (a@pos0) attends to pos0 → index 0
 	# Index 1 (ZERO@pos1) fully masked → attends to nothing
 	# Index 2 (b@pos2) attends to pos0,1,2 BUT pos1 is masked → indices 0,2 only
+	# NOTE: Use log-space mask (0 = attend, -inf = mask) - consistent with transformers
 	attention_mask_B = torch.tensor([
-		[[1, 0, 0],  # a@pos0 attends to itself
-		 [0, 0, 0],  # ZERO@pos1 fully masked (attends to nothing)
-		 [1, 0, 1]]  # b@pos2 attends to a@pos0 and itself (skips ZERO)
+		[[0, mask_value, mask_value],  # a@pos0 attends to itself
+		 [mask_value, mask_value, mask_value],  # ZERO@pos1 fully masked (attends to nothing)
+		 [0, mask_value, 0]]  # b@pos2 attends to a@pos0 and itself (skips ZERO)
 	], dtype=torch.float32).unsqueeze(1)
 
 	with torch.no_grad():
@@ -299,6 +310,7 @@ def test_masked_token_position(dtype):
 	a, b = 40, 50
 	PAD = 0   # Masked token at tail
 	ZERO = 0  # Masked token in middle
+	mask_value = -float("inf")
 
 	# Scenario A: [a, b, PAD] with PAD at end
 	input_ids_A = torch.tensor([[a, b, PAD]], dtype=torch.long)
@@ -307,10 +319,11 @@ def test_masked_token_position(dtype):
 	# Index 0 (a@pos0) attends to pos0 → index 0
 	# Index 1 (b@pos2) attends to pos0,1,2 BUT pos1 is masked → indices 0,1 (skips PAD)
 	# Index 2 (PAD@pos1) fully masked
+	# NOTE: Use log-space mask (0 = attend, -inf = mask) - consistent with transformers
 	attention_mask_A = torch.tensor([
-		[[1, 0, 0],  # a@pos0 attends to itself
-		 [1, 1, 0],  # b@pos2 attends to a@pos0 and itself (PAD masked)
-		 [0, 0, 0]]  # PAD@pos1 fully masked
+		[[0, mask_value, mask_value],  # a@pos0 attends to itself
+		 [0, 0, mask_value],  # b@pos2 attends to a@pos0 and itself (PAD masked)
+		 [mask_value, mask_value, mask_value]]  # PAD@pos1 fully masked
 	], dtype=torch.float32).unsqueeze(1)
 
 	# Scenario B: [a, ZERO, b] with ZERO in middle (same as Test 3 Sequence B)
@@ -320,10 +333,11 @@ def test_masked_token_position(dtype):
 	# Index 0 (a@pos0) attends to pos0 → index 0
 	# Index 1 (ZERO@pos1) fully masked
 	# Index 2 (b@pos2) attends to pos0,2 → indices 0,2 (skips ZERO)
+	# NOTE: Use log-space mask (0 = attend, -inf = mask)
 	attention_mask_B = torch.tensor([
-		[[1, 0, 0],  # a@pos0 attends to itself
-		 [0, 0, 0],  # ZERO@pos1 fully masked
-		 [1, 0, 1]]  # b@pos2 attends to a@pos0 and itself (skips ZERO)
+		[[0, mask_value, mask_value],  # a@pos0 attends to itself
+		 [mask_value, mask_value, mask_value],  # ZERO@pos1 fully masked
+		 [0, mask_value, 0]]  # b@pos2 attends to a@pos0 and itself (skips ZERO)
 	], dtype=torch.float32).unsqueeze(1)
 
 	with torch.no_grad():
