@@ -1000,7 +1000,9 @@ class ONNXExporter:
 				Returns:
 				    values: [batch]
 				"""
-				return self.value_head(hidden_states).squeeze(-1)
+				values = self.value_head(hidden_states)  # [batch, 1]
+				# Reshape to [batch] explicitly for ONNX compatibility
+				return values.view(-1)
 
 		value_head_wrapper = ValueHeadWrapper(model.value_head)
 		value_head_wrapper.eval()
