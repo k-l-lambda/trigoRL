@@ -10846,3 +10846,95 @@ Successfully implemented complete offline training data generation pipeline:
 **Performance:** Ready for production training with baseline 3.33 games/sec, scalable to 50+ games/sec with CUDA MCTS.
 
 </details>
+
+
+> Correct MCTS performance comparison and implement comprehensive benchmarking with CPU-only mode support.
+
+<details>
+<summary>Fixed MCTS benchmarking and implemented CPU-only mode</summary>
+
+### Problem Identified
+
+Initial performance claim of 58× speedup (C++ vs TypeScript) was incorrect. Root cause analysis revealed:
+- TypeScript test was using direct neural sampling instead of proper MCTS
+- Leading to artificially high performance figures for C++ implementation
+- Needed fair comparison with equivalent MCTS configurations on both sides
+
+### Solution Implemented
+
+**1. Corrected Performance Benchmarking**
+
+Re-tested with proper MCTS configuration (50 simulations) for fair comparison:
+- C++ MCTS: 162s / 10 games (16.2s/game, 50.8 moves/game, 6.38ms/simulation)
+- TypeScript MCTS: 624s / 10 games (62.4s/game, 31.1 moves/game, 40.1ms/simulation)
+- **Actual speedup: 3.85×** (compared to false 58× claim)
+
+**2. GPU Acceleration Issues Discovered**
+
+Identified critical CUDA version mismatch preventing GPU acceleration:
+- System has: CUDA 11.8
+- ONNX Runtime 1.17.0 requires: CUDA 12.x
+- Result: GPU acceleration unavailable without system upgrade
+
+**3. CPU-Only Mode Implementation** (`/home/camus/work/trigo.cpp/src/shared_model_inferencer.cpp`)
+
+Implemented `TRIGO_FORCE_CPU` environment variable to force CPU-only execution:
+```cpp
+// Environment variable check at initialization
+if (std::getenv("TRIGO_FORCE_CPU")) {
+    disable_cuda_provider();
+    use_cpu_provider_only();
+}
+```
+
+Benefits:
+- Avoids CUDA version mismatch crashes
+- Enables reliable benchmarking on CPU
+- No code changes required, just env var configuration
+- Fallback for systems without compatible CUDA
+
+**4. Comprehensive Benchmarking Script** (`/home/camus/work/trigo.cpp/tools/benchmark_mcts.sh`)
+
+Created production-ready benchmark script with:
+- Configurable board shape, game count, and MCTS simulations
+- Automatic script-relative path resolution (portable across machines)
+- Model validation before running
+- CPU-only mode enabled by default
+- Detailed performance reporting with per-game and per-simulation metrics
+- Error handling and logging
+
+Usage example:
+```bash
+./benchmark_mcts.sh --games 10 --board 5x5x5 --simulations 50
+```
+
+**5. Documentation Improvements**
+
+- **CPU_ONLY_MODE.md** (`/home/camus/work/trigo.cpp/docs/CPU_ONLY_MODE.md`): Comprehensive guide for CPU-only operation
+- **README_BENCHMARK.md** (`/home/camus/work/trigo.cpp/tools/README_BENCHMARK.md`): Translated from Chinese to English with benchmarking instructions
+- **PERFORMANCE_ANALYSIS.md** (`/home/camus/work/trigo.cpp/docs/PERFORMANCE_ANALYSIS.md`): Updated with corrected benchmark data
+
+### Files Modified/Created
+
+- `/home/camus/work/trigo.cpp/src/shared_model_inferencer.cpp` - Added TRIGO_FORCE_CPU support
+- `/home/camus/work/trigo.cpp/tools/benchmark_mcts.sh` - Created comprehensive benchmarking script
+- `/home/camus/work/trigo.cpp/docs/CPU_ONLY_MODE.md` - Created CPU-only mode documentation
+- `/home/camus/work/trigo.cpp/docs/PERFORMANCE_ANALYSIS.md` - Updated with corrected results
+- `/home/camus/work/trigo.cpp/tools/README_BENCHMARK.md` - Translated to English
+
+### Key Learnings
+
+1. **Benchmarking Discipline**: Importance of isolating variables (MCTS config vs neural sampling) for fair comparison
+2. **CUDA Version Dependencies**: ONNX Runtime has strict CUDA version requirements that may not match system CUDA
+3. **Defensive Programming**: Environment variables provide reliable fallback for hardware constraints
+4. **Reproducibility**: Comprehensive documentation and automated scripts improve development velocity
+
+### Performance Baseline (CPU-only, fair comparison)
+
+- C++ MCTS: 6.38ms/simulation
+- TypeScript MCTS: 40.1ms/simulation
+- **Speedup: 3.85×** (production code, no sampling shortcuts)
+
+Next steps: Investigate GPU CUDA 12.x upgrade path and continue MCTS optimization work.
+
+</details>
