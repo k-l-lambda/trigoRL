@@ -740,66 +740,245 @@ class ONNXExporter:
 		logger.info("\n[1/3] Exporting base model with tree attention...")
 
 		class BaseModelWithTreeAttention(nn.Module):
-			"""Base transformer that outputs hidden states with tree attention support."""
-			def __init__(self, base_model):
+			"""Base transformer that outputs hidden states with tree attention support.
+
+			Supports two execution modes:
+			1. Without cache: Computes full sequence (prefix + evaluated)
+			2. With cache: Reuses cached prefix KV states, computes only evaluated tokens
+			"""
+			def __init__(self, base_model, use_cache: bool = False):
 				super().__init__()
 				self.model = base_model
+				self.use_cache = use_cache
+
+			def _get_cache_length(self, past_key_values):
+				"""Extract prefix length from cache tuple.
+
+				Args:
+				    past_key_values: Tuple of ((k_0, v_0), (k_1, v_1), ...) or Cache object
+
+				Returns:
+				    int: Cache sequence length (prefix length)
+				"""
+				if past_key_values is None:
+					return 0
+
+				# Handle DynamicCache
+				if hasattr(past_key_values, 'get_seq_length'):
+					seq_len = past_key_values.get_seq_length(layer_idx=0)
+					return seq_len if seq_len is not None else 0
+
+				# Handle tuple format
+				if isinstance(past_key_values, tuple) and len(past_key_values) > 0:
+					# Get first layer's key tensor: [batch, num_heads, cache_len, head_dim]
+					return past_key_values[0][0].shape[2]
+
+				return 0
+
+			def _build_cache_attention_mask(self, batch_size, m, prefix_length, evaluated_mask, device, dtype):
+				"""Build attention mask for cache mode.
+
+				In cache mode, evaluated tokens attend to:
+				- Full cached prefix (positions 0:prefix_length)
+				- Each other per evaluated_mask pattern
+
+				Args:
+				    batch_size: Batch size
+				    m: Number of evaluated tokens
+				    prefix_length: Length of cached prefix
+				    evaluated_mask: [batch, m, m] evaluated tokens attention pattern
+				    device: Target device
+				    dtype: Target dtype
+
+				Returns:
+				    attention_mask: [batch, 1, m, prefix_length + m] in log-space
+				"""
+				total_context_len = prefix_length + m
+
+				# Build mask: [batch, m, prefix_length + m]
+				mask = torch.zeros(batch_size, m, total_context_len, device=device, dtype=dtype)
+
+				# Evaluated tokens attend to ALL cached prefix positions
+				mask[:, :, :prefix_length] = 1.0
+
+				# Evaluated tokens attend to each other per evaluated_mask
+				mask[:, :, prefix_length:] = evaluated_mask
+
+				# Convert to log-space (-inf for masked positions)
+				mask_value = -float("inf")
+				mask = torch.where(
+					mask == 1.0,
+					torch.tensor(0.0, dtype=dtype, device=device),
+					torch.tensor(mask_value, dtype=dtype, device=device)
+				)
+
+				return mask.unsqueeze(1)  # [batch, 1, m, prefix_length + m]
+
+			def _build_full_attention_mask(self, batch_size, n, m, evaluated_mask, device, dtype):
+				"""Build attention mask for non-cache mode.
+
+				Args:
+				    batch_size: Batch size
+				    n: Prefix length
+				    m: Evaluated length
+				    evaluated_mask: [batch, m, m]
+				    device: Target device
+				    dtype: Target dtype
+
+				Returns:
+				    attention_mask: [batch, 1, n+m, n+m] in log-space
+				"""
+				total_len = n + m
+
+				# Causal mask for full sequence
+				causal_mask = torch.tril(
+					torch.ones(total_len, total_len, device=device, dtype=dtype)
+				)
+
+				# Expand for batch
+				combined_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1).clone()
+
+				# Apply evaluated_mask to evaluated region
+				combined_mask[:, n:, n:] = evaluated_mask
+
+				# Convert to log-space
+				mask_value = -float("inf")
+				combined_mask = torch.where(
+					combined_mask == 1.0,
+					torch.tensor(0.0, dtype=dtype, device=device),
+					torch.tensor(mask_value, dtype=dtype, device=device)
+				)
+
+				return combined_mask.unsqueeze(1)  # [batch, 1, n+m, n+m]
+
+			def _tuple_to_cache(self, past_tuple):
+				"""Convert ONNX tuple format to transformers Cache object.
+
+				Args:
+				    past_tuple: ((k_0, v_0), (k_1, v_1), ...) or None
+
+				Returns:
+				    Cache object or None
+				"""
+				if past_tuple is None:
+					return None
+
+				# Import DynamicCache from transformers
+				try:
+					from transformers import DynamicCache
+				except ImportError:
+					# Fallback: return as tuple (some models accept tuple directly)
+					return past_tuple
+
+				cache = DynamicCache()
+				for layer_idx, (key, value) in enumerate(past_tuple):
+					cache.update(key, value, layer_idx=layer_idx)
+
+				return cache
+
+			def _cache_to_tuple(self, cache):
+				"""Convert transformers Cache object to ONNX tuple format.
+
+				Args:
+				    cache: Cache object from model output
+
+				Returns:
+				    Tuple of ((k_0, v_0), (k_1, v_1), ...)
+				"""
+				if cache is None:
+					return None
+
+				# If cache is already a tuple, return as-is
+				if isinstance(cache, tuple):
+					return cache
+
+				# Use to_legacy_cache() method for DynamicCache
+				if hasattr(cache, 'to_legacy_cache'):
+					return cache.to_legacy_cache()
+
+				raise TypeError(f"Unknown cache type: {type(cache)}")
 
 			def forward(
 				self,
 				prefix_ids: torch.Tensor,
 				evaluated_ids: torch.Tensor,
 				evaluated_mask: torch.Tensor,
-			) -> torch.Tensor:
+				past_key_values = None,
+			):
 				"""
-				Forward pass with tree attention.
+				Forward pass with tree attention and optional KV cache.
+
+				Two execution modes:
+				1. No cache (past_key_values=None): Compute full sequence (prefix + evaluated)
+				   Returns: hidden_states [batch, n+m, hidden]
+
+				2. With cache (past_key_values provided): Skip prefix, compute only evaluated
+				   Returns: (hidden_states [batch, m, hidden], present_key_values)
 
 				Inputs:
 				    prefix_ids: [batch, n]
 				    evaluated_ids: [batch, m]
 				    evaluated_mask: [batch, m, m]
+				    past_key_values: Optional cache tuple ((k_0, v_0), ...) or None
 
 				Returns:
-				    hidden_states: [batch, n+m, hidden_dim]
+				    If use_cache=False: hidden_states [batch, n+m, hidden]
+				    If use_cache=True: (hidden_states [batch, m, hidden], present_key_values)
 				"""
 				batch_size, n = prefix_ids.shape
 				_, m = evaluated_ids.shape
+				device = prefix_ids.device
+				dtype = torch.float32
 
-				# Concatenate inputs
-				input_ids = torch.cat([prefix_ids, evaluated_ids], dim=1)  # [batch, n+m]
+				# Determine execution mode
+				cache_mode = (past_key_values is not None) and self.use_cache
 
-				# Calculate position_ids (same as TreeLM logic)
-				prefix_positions = torch.arange(n, device=input_ids.device).unsqueeze(0).expand(batch_size, -1)
-				mask_row_sums = evaluated_mask.sum(dim=2)
-				evaluated_positions = (n + mask_row_sums - 1).long()
-				position_ids = torch.cat([prefix_positions, evaluated_positions], dim=1)
+				if cache_mode:
+					# === CACHE MODE: Skip prefix, compute only evaluated ===
+					prefix_length = self._get_cache_length(past_key_values)
+					input_ids = evaluated_ids  # Only evaluated tokens
 
-				# Build combined attention mask
-				total_len = n + m
-				causal_mask = torch.tril(
-					torch.ones(total_len, total_len, device=input_ids.device, dtype=torch.float32)
-				)
-				combined_mask = causal_mask.unsqueeze(0).expand(batch_size, -1, -1).clone()
-				combined_mask[:, n:, n:] = evaluated_mask
+					# Position IDs for evaluated tokens
+					# evaluated_positions = prefix_length + mask_row_sums - 1
+					mask_row_sums = evaluated_mask.sum(dim=2)
+					position_ids = (prefix_length + mask_row_sums - 1).long()
 
-				# Convert to log-space (-inf for masked positions)
-				mask_value = -float("inf")
-				combined_mask = torch.where(
-					combined_mask == 1.0,
-					torch.tensor(0.0, dtype=torch.float32, device=input_ids.device),
-					torch.tensor(mask_value, dtype=torch.float32, device=input_ids.device)
-				)
-				attention_mask = combined_mask.unsqueeze(1)  # [batch, 1, n+m, n+m]
+					# Attention mask: [batch, 1, m, prefix_length + m]
+					attention_mask = self._build_cache_attention_mask(
+						batch_size, m, prefix_length, evaluated_mask, device, dtype
+					)
+
+					# Convert tuple to Cache object for model
+					past_cache = self._tuple_to_cache(past_key_values)
+
+				else:
+					# === NO CACHE MODE: Compute full sequence ===
+					input_ids = torch.cat([prefix_ids, evaluated_ids], dim=1)  # [batch, n+m]
+
+					# Position IDs: prefix [0..n-1] + evaluated [n+mask_sum-1, ...]
+					prefix_positions = torch.arange(n, device=device).unsqueeze(0).expand(batch_size, -1)
+					mask_row_sums = evaluated_mask.sum(dim=2)
+					evaluated_positions = (n + mask_row_sums - 1).long()
+					position_ids = torch.cat([prefix_positions, evaluated_positions], dim=1)
+
+					# Full attention mask: [batch, 1, n+m, n+m]
+					attention_mask = self._build_full_attention_mask(
+						batch_size, n, m, evaluated_mask, device, dtype
+					)
+
+					past_cache = None
 
 				# Forward through base model
 				outputs = self.model(
 					input_ids,
 					attention_mask=attention_mask,
 					position_ids=position_ids,
+					past_key_values=past_cache,
+					use_cache=self.use_cache,
 					output_hidden_states=True
 				)
 
-				# Return last layer hidden states
+				# Extract hidden states
 				if hasattr(outputs, 'hidden_states'):
 					hidden_states = outputs.hidden_states[-1]
 				elif isinstance(outputs, dict) and 'hidden_states' in outputs:
@@ -807,7 +986,13 @@ class ONNXExporter:
 				else:
 					raise ValueError("Model output does not contain hidden_states")
 
-				return hidden_states  # [batch, n+m, hidden_dim]
+				# Return based on cache mode
+				if self.use_cache:
+					# Convert Cache object to tuple for ONNX
+					present_tuple = self._cache_to_tuple(outputs.past_key_values)
+					return hidden_states, present_tuple
+				else:
+					return hidden_states
 
 		base_wrapper = BaseModelWithTreeAttention(base_model)
 		base_wrapper.eval()
