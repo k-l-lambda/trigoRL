@@ -1391,11 +1391,18 @@ class ONNXExporter:
 			# Build dynamic axes
 			dynamic_axes_prefix = {}
 			if dynamic_batch:
-				dynamic_axes_prefix['prefix_ids'] = {0: 'batch_size'}
+				dynamic_axes_prefix['prefix_ids'] = {0: 'batch_size', 1: 'prefix_len'}
 				for i in range(num_layers):
 					# Cache shape: [batch, num_heads, prefix_len, head_dim]
-					dynamic_axes_prefix[f'cache_key_{i}'] = {0: 'batch_size'}
-					dynamic_axes_prefix[f'cache_value_{i}'] = {0: 'batch_size'}
+					dynamic_axes_prefix[f'cache_key_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
+					dynamic_axes_prefix[f'cache_value_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
+			else:
+				# Even without dynamic batch, support dynamic sequence length
+				dynamic_axes_prefix['prefix_ids'] = {1: 'prefix_len'}
+				for i in range(num_layers):
+					# Cache shape: [batch, num_heads, prefix_len, head_dim]
+					dynamic_axes_prefix[f'cache_key_{i}'] = {2: 'prefix_len'}
+					dynamic_axes_prefix[f'cache_value_{i}'] = {2: 'prefix_len'}
 
 			# Export prefix-only model
 			try:
@@ -1486,12 +1493,22 @@ class ONNXExporter:
 			# Build dynamic axes
 			dynamic_axes_eval = {}
 			if dynamic_batch:
-				dynamic_axes_eval['evaluated_ids'] = {0: 'batch_size'}
-				dynamic_axes_eval['evaluated_mask'] = {0: 'batch_size'}
-				dynamic_axes_eval['hidden_states'] = {0: 'batch_size'}
+				dynamic_axes_eval['evaluated_ids'] = {0: 'batch_size', 1: 'eval_len'}
+				dynamic_axes_eval['evaluated_mask'] = {0: 'batch_size', 1: 'eval_len', 2: 'eval_len'}
+				dynamic_axes_eval['hidden_states'] = {0: 'batch_size', 1: 'eval_len'}
 				for i in range(num_layers):
-					dynamic_axes_eval[f'past_key_{i}'] = {0: 'batch_size'}
-					dynamic_axes_eval[f'past_value_{i}'] = {0: 'batch_size'}
+					# Cache shape: [batch, num_heads, prefix_len, head_dim]
+					dynamic_axes_eval[f'past_key_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
+					dynamic_axes_eval[f'past_value_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
+			else:
+				# Even without dynamic batch, support dynamic sequence lengths
+				dynamic_axes_eval['evaluated_ids'] = {1: 'eval_len'}
+				dynamic_axes_eval['evaluated_mask'] = {1: 'eval_len', 2: 'eval_len'}
+				dynamic_axes_eval['hidden_states'] = {1: 'eval_len'}
+				for i in range(num_layers):
+					# Cache shape: [batch, num_heads, prefix_len, head_dim]
+					dynamic_axes_eval[f'past_key_{i}'] = {2: 'prefix_len'}
+					dynamic_axes_eval[f'past_value_{i}'] = {2: 'prefix_len'}
 
 			# Export eval-cached model
 			try:
