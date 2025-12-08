@@ -11435,3 +11435,146 @@ Theoretical maximum limited by:
 **Status**: C++ integration (Phase 5.5) now unblocked and ready when needed.
 
 </details>
+
+
+> Fix critical value sign bug in C++ MCTS implementation and validate C++/TypeScript inference equivalence.
+
+<details>
+<summary>Value Sign Bug Fixed, C++/TypeScript Inference Validated</summary>
+
+### Critical Bug Fix: Value Model Sign Correction
+
+Fixed a critical bug in value inference across all MCTS implementations that was causing incorrect game termination behavior.
+
+**Problem Identified**:
+- Value model outputs absolute values where positive = White advantage (fixed perspective)
+- MCTS needs relative values where positive = current player advantage (player perspective)
+- Result: Games hanging and incorrect behavior with PASS moves
+
+**Root Cause Analysis**:
+The value model is always trained from White's perspective (outputs > 0 when White is winning). However, in MCTS tree search, we need values relative to the current player - when it's Black's turn, a positive value should mean Black is winning, not White.
+
+**Solution Implemented**:
+Added player perspective conversion in all three value inference locations:
+```cpp
+float value = inferencer->value_inference_with_cache(3);
+Stone current_player = game.get_current_player();
+if (current_player == Stone::Black) {
+    value = -value;  // Convert to current player perspective
+}
+```
+
+**Files Modified**:
+- `include/cached_mcts.hpp` - Added perspective conversion in `evaluate_with_cache()`
+- `include/mcts.hpp` - Added perspective conversion in `evaluate()`
+- `include/self_play_policy.hpp` - Added perspective conversion in `CachedAlphaZeroPolicy`
+
+**Impact**:
+- Games now terminate properly (13 moves vs. hanging before)
+- Black plays correctly with proper value guidance
+- MCTS selection works as intended
+
+### C++ vs TypeScript Inference Validation
+
+Created comprehensive cross-language inference comparison tests to verify equivalence.
+
+**Test Implementation**:
+- C++ test: `tests/test_compare_with_ts.cpp` - Compares policy logits and value scores
+- TypeScript test: `trigo-web/tests/testPolicyInferenceComparison.ts` - Mirror validation
+- Test prefix: `"[Board 5x5]\n\n1. y0 "` (standard test scenario)
+
+**Validation Results**:
+
+1. **Policy Logits**: Perfect match within floating-point precision
+   - All 25 moves (24 valid + PASS) have matching logits
+   - Difference threshold: < 0.000001
+   - Status: ✅ PASSING
+
+2. **Value Scores**: Exact match
+   - Both C++ and TypeScript return: `-0.027797`
+   - No discrepancies detected
+   - Status: ✅ PASSING
+
+3. **Architecture Consistency**:
+   - C++ and TypeScript use identical ONNX model inference
+   - Output shapes and data types consistent across languages
+   - Batch processing behavior verified
+
+### PASS Selection Analysis
+
+Documented why PASS can be selected despite low policy prior, confirming correct AlphaZero behavior.
+
+**Key Finding**:
+- PASS has low policy prior: `-0.581802`
+- But can be selected by MCTS via tree search
+- This is **correct AlphaZero behavior**: value network corrects policy through exploration
+- MCTS final selection is by visit count, not prior probability
+- Documentation: `docs/PASS_SELECTION_ANALYSIS.md`
+
+**Why This Matters**:
+- Demonstrates proper integration of policy and value networks
+- Policy provides initial guidance, value provides correction
+- Tree search balances exploration and exploitation
+
+### Documentation
+
+**Created Files**:
+- `docs/VALUE_SIGN_BUG_FIX.md` - Detailed bug analysis and fix verification
+- `docs/PASS_SELECTION_ANALYSIS.md` - Explanation of AlphaZero behavior
+- Before/after comparison showing game behavior improvement
+
+**Key Content**:
+- Root cause analysis with code examples
+- Solution explanation and implementation details
+- Verification results showing games terminate properly
+- Impact assessment on self-play quality
+
+### Verification Summary
+
+| Component | Before | After | Status |
+|-----------|--------|-------|--------|
+| Game termination | Hanging | 13 moves ✓ | Fixed |
+| Policy logits (C++ vs TS) | Unknown | Match < 0.000001 | Validated |
+| Value scores (C++ vs TS) | Unknown | Exact match -0.027797 | Validated |
+| Black player behavior | Incorrect | Correct | Fixed |
+| AlphaZero semantics | Broken | Correct | Fixed |
+
+### Files Modified
+
+**Implementation**:
+- `/home/camus/work/trigo.cpp/include/cached_mcts.hpp` - Value sign fix
+- `/home/camus/work/trigo.cpp/include/mcts.hpp` - Value sign fix
+- `/home/camus/work/trigo.cpp/include/self_play_policy.hpp` - Value sign fix
+
+**Tests**:
+- `/home/camus/work/trigo.cpp/tests/test_compare_with_ts.cpp` - C++ validation (NEW)
+- `/home/camus/work/trigoRL/trigo-web/tests/testPolicyInferenceComparison.ts` - TypeScript validation (NEW)
+
+**Documentation**:
+- `docs/VALUE_SIGN_BUG_FIX.md` - Detailed bug fix documentation (NEW)
+- `docs/PASS_SELECTION_ANALYSIS.md` - AlphaZero behavior analysis (NEW)
+
+### Key Learnings
+
+1. **Perspective Matters**: Value network perspective (absolute vs. relative) critical for MCTS
+2. **Cross-Language Validation**: Confirmed identical behavior across C++ and TypeScript implementations
+3. **AlphaZero Semantics**: PASS selection despite low prior is correct tree search behavior
+4. **Debugging Value Networks**: Sign conventions must be clearly documented to prevent confusion
+5. **Inference Equivalence**: Achieved perfect floating-point equivalence across language boundaries
+
+### Impact
+
+- **Self-play quality**: Significantly improved with correct value guidance
+- **Debugging efficiency**: Clear understanding of model behavior enables faster issue resolution
+- **Code confidence**: C++/TypeScript equivalence validation provides strong confidence in both implementations
+- **Production readiness**: Both implementations now validated and ready for large-scale self-play
+
+### Summary
+
+✅ **Critical Bug Fixed**: Value sign handling corrected in all MCTS implementations
+✅ **Cross-Language Validation**: C++ and TypeScript inference confirmed equivalent
+✅ **Documentation Complete**: Detailed analysis of bug and AlphaZero behavior
+✅ **Self-Play Enabled**: Games now terminate correctly with proper value guidance
+✅ **Team Understanding**: Clear documentation of why correct behavior can appear anomalous
+
+</details>
