@@ -12100,3 +12100,61 @@ TypeScript (tree model) shows 4/5 common moves with Python. The remaining differ
 Models in `outputs/trigor/20251204-trigo-value-gpt2-l6-h64-251125-lr500/GPT2CausalLM_ep0019_shared_cached/` now have correct output dimensions for eval_cached model.
 
 </details>
+
+
+<details>
+<summary>Cleaned up temporary/debug test scripts in trigo-web and trigoRL</summary>
+
+### Overview
+
+Reviewed and cleaned up test scripts to remove temporary debugging, verification, and demo files that were created during development of prefix cache and tree building features. These issues have been resolved and the debug scripts are no longer needed.
+
+### trigo-web/tests/ (TypeScript)
+
+**Removed 8 files:**
+| File | Reason |
+|------|--------|
+| `checkModelInputs.ts` | Simple utility - one-time ONNX model input checker |
+| `debugMCTS.ts` | Debug script - step-by-step MCTS debugging |
+| `debugTreeAgent.ts` | Debug script - TreeAgent.scoreMoves debugging |
+| `testEvaluatedIdsOrder.ts` | Outdated - evaluated_ids order issue resolved |
+| `testPolicyPriors.ts` | Outdated - tree building test without inference |
+| `testScoreMoves.ts` | Duplicate - superseded by MCTS test |
+| `testTreeBuild3D.ts` | Outdated - 3D tree building issue resolved |
+| `compareTreeBuilding.ts` | Outdated - tree building comparison issue resolved |
+
+**Kept 2 long-term valuable files:**
+- `testMCTSSingleStep.ts` - C++/TS consistency verification
+- `testMCTSWithVisits.ts` - Full MCTS with visits testing
+
+### trigoRL/tests/ (Python)
+
+**Removed 12 files:**
+| File | Reason |
+|------|--------|
+| `test_dotenv.py` | One-time dotenv config verification |
+| `test_dotenv_simple.py` | One-time dotenv pattern test |
+| `verify_dictconfig_support.py` | One-time DictConfig verification |
+| `demo_positional_config.py` | Demo script |
+| `test_kvcache_export_simple.py` | Superseded by integration tests |
+| `benchmark_kvcache.py` | Superseded by final benchmark |
+| `test_prefix_cache_redesign.py` | Development test for redesign |
+| `models/test_dtype_vs_seqlen.py` | Debug investigation |
+| `models/test_position_ids_debug.py` | Debug investigation |
+| `models/test_token_reordering_simple.py` | Debug investigation |
+| `test_batch_visualization.local.png` | Local file |
+| `run_all_tests.local.sh` | Local script |
+
+**Kept ~30+ core tests:**
+- Unit tests: dataset, model, tokenizer functionality
+- MCTS comparison: C++/Python consistency (`test_mcts_single_step_comparison.py`, `test_mcts_tree_model.py`)
+- Model tests: treeLM, evaluationLM, value head
+- KV cache: `test_kvcache.py`, `test_kvcache_integration.py`
+- Benchmark: `benchmark_prefix_cache_final.py`
+
+### Summary
+
+Total removed: **20 files** (8 TypeScript + 12 Python)
+Total kept: **~35 files** of long-term value
+
+</details>
