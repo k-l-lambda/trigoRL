@@ -12029,3 +12029,74 @@ The prefix cache ONNX export and C++ inference are now verified to produce ident
 This confirms that the earlier tree building fix (preserving insertion order) was the root cause of discrepancies, and both C++ and TypeScript implementations are now consistent with PyTorch.
 
 </details>
+
+
+<details>
+<summary>Fixed ONNX eval_cached mode output format - Python/C++ MCTS now match exactly</summary>
+
+### Problem
+
+When testing MCTS single step consistency between Python and C++, results showed different log scores and move rankings. Investigation revealed that the `eval_cached` mode in `exportOnnx.py` was outputting wrong dimensions.
+
+### Root Cause
+
+**TreeLM** outputs `[batch, m+1, vocab_size]` - includes:
+- Position 0: logits for prefix's last position (n-1)
+- Positions 1..m: logits for evaluated positions 0..m-1
+
+**BaseModelWithTreeAttention (eval_cached)** was only outputting `[batch, m, hidden_dim]` - missing the prefix's last position.
+
+### Fix (exportOnnx.py lines 1000-1090)
+
+Modified `eval_cached` mode to:
+1. Prepend a dummy token at position n-1 (prefix's last position)
+2. Build proper attention mask for cache mode:
+   - Row 0 (dummy prefix last): attend to all cached prefix
+   - Rows 1..m (evaluated): attend to all prefix + dummy + other evaluated per mask
+3. Return m+1 hidden states to match TreeLM format
+
+Key code changes:
+```python
+# Create dummy token for position n-1 (prefix last position)
+dummy_prefix_last = torch.zeros(batch_size, 1, dtype=evaluated_ids.dtype, device=device)
+
+# Concatenate: [dummy_prefix_last, evaluated_ids] -> [batch, 1+m]
+input_ids = torch.cat([dummy_prefix_last, evaluated_ids], dim=1)
+
+# Position IDs:
+# - Position 0: prefix_length - 1 (last prefix position)
+# - Positions 1..m: prefix_length + mask_row_sums - 1
+prefix_last_pos = torch.full((batch_size, 1), prefix_length - 1, ...)
+position_ids = torch.cat([prefix_last_pos, evaluated_positions], dim=1)
+```
+
+### Results After Fix
+
+**Python vs C++ comparison (prefix-cached models):**
+| Rank | Move | Python Log Score | C++ Log Score |
+|------|------|------------------|---------------|
+| 1 | az | -7.182709 | -7.182709 |
+| 2 | zz | -7.219956 | -7.219956 |
+| 3 | aa | -7.295769 | -7.295769 |
+| 4 | 0z | -7.443517 | -7.443516 |
+| 5 | za | -7.448757 | -7.448757 |
+
+- **Top 5 moves: 5/5 common** ✓
+- **Log scores: match to 6 decimal places** ✓
+- **Priors: match to 5 decimal places** ✓
+
+### TypeScript Comparison Note
+
+TypeScript (tree model) shows 4/5 common moves with Python. The remaining difference is likely due to TypeScript not adding START token to prefix (potential bug in `trigoTreeAgent.ts`).
+
+### Files Modified
+
+- `exportOnnx.py`: Fixed eval_cached mode output format (lines 1000-1090)
+- `tests/test_mcts_single_step_comparison.py`: Updated with +1 indexing for m+1 output
+- `tests/test_mcts_tree_model.py`: Added note about START token
+
+### Re-exported Models
+
+Models in `outputs/trigor/20251204-trigo-value-gpt2-l6-h64-251125-lr500/GPT2CausalLM_ep0019_shared_cached/` now have correct output dimensions for eval_cached model.
+
+</details>

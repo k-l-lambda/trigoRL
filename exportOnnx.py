@@ -998,6 +998,9 @@ class ONNXExporter:
 					return self._cache_to_tuple(outputs.past_key_values)
 
 				# === MODE 2: EVAL_CACHED - Use fixed cache, compute evaluated ===
+				# IMPORTANT: Returns m+1 hidden states to match TreeLM output format:
+				#   - Position 0: hidden state for prefix's last position (n-1)
+				#   - Positions 1..m: hidden states for evaluated positions 0..m-1
 				elif actual_mode == 'eval_cached':
 					if evaluated_ids is None or evaluated_mask is None or past_key_values is None:
 						raise ValueError("eval_cached mode requires evaluated_ids, evaluated_mask, and past_key_values")
@@ -1005,22 +1008,69 @@ class ONNXExporter:
 					batch_size, m = evaluated_ids.shape
 					prefix_length = self._get_cache_length(past_key_values)
 
-					# Position IDs for evaluated tokens
-					# evaluated_positions = prefix_length + mask_row_sums - 1
-					mask_row_sums = evaluated_mask.sum(dim=2)
-					position_ids = (prefix_length + mask_row_sums - 1).long()
+					# To get prefix's last position hidden state, we need to:
+					# 1. Run model on a dummy token at position prefix_length-1
+					# 2. Or extract from cache... but cache only has KV, not hidden states
 
-					# Attention mask: [batch, 1, m, prefix_length + m]
-					attention_mask = self._build_cache_attention_mask(
-						batch_size, m, prefix_length, evaluated_mask, device, dtype
+					# Solution: Prepend a dummy token (the last prefix token) to evaluated_ids
+					# We'll use token 0 as placeholder since we only need the hidden state,
+					# and position_ids will ensure correct positional encoding
+
+					# Create dummy token for position n-1 (prefix last position)
+					# Using token ID 0 is fine because we only care about the hidden state
+					# which depends on position_ids and attention to cached KV
+					dummy_prefix_last = torch.zeros(batch_size, 1, dtype=evaluated_ids.dtype, device=device)
+
+					# Concatenate: [dummy_prefix_last, evaluated_ids] -> [batch, 1+m]
+					input_ids = torch.cat([dummy_prefix_last, evaluated_ids], dim=1)
+
+					# Position IDs:
+					# - Position 0 (dummy_prefix_last): prefix_length - 1 (last prefix position)
+					# - Positions 1..m (evaluated): prefix_length + mask_row_sums - 1
+					prefix_last_pos = torch.full((batch_size, 1), prefix_length - 1, dtype=torch.long, device=device)
+					mask_row_sums = evaluated_mask.sum(dim=2)
+					evaluated_positions = (prefix_length + mask_row_sums - 1).long()
+					position_ids = torch.cat([prefix_last_pos, evaluated_positions], dim=1)
+
+					# Attention mask: [batch, 1, 1+m, prefix_length + 1 + m]
+					# In cache mode, key_length = prefix_length (from cache) + 1 + m (current input)
+					# But wait - we're NOT updating cache, so we only attend to cached KV
+					# Actually, the model will compute attention over:
+					# - cached keys: prefix_length positions
+					# - current input: 1+m positions
+					# So total key_length = prefix_length + 1 + m
+					query_len = 1 + m
+					key_len = prefix_length + query_len  # Cache + current input
+
+					attention_mask = torch.zeros(batch_size, query_len, key_len, device=device, dtype=dtype)
+
+					# Row 0 (dummy prefix last): attend to all prefix positions
+					attention_mask[:, 0, :prefix_length] = 1.0
+
+					# Rows 1..m (evaluated): attend to all prefix + evaluated per mask
+					# They should attend to:
+					# - All cached prefix (positions 0:prefix_length)
+					# - The dummy prefix last token (position prefix_length)
+					# - Other evaluated tokens per evaluated_mask
+					attention_mask[:, 1:, :prefix_length] = 1.0  # All prefix
+					attention_mask[:, 1:, prefix_length] = 1.0  # The dummy prefix last token
+					attention_mask[:, 1:, prefix_length + 1:] = evaluated_mask  # Other evaluated
+
+					# Convert to log-space (-inf for masked positions)
+					mask_value = -float("inf")
+					attention_mask = torch.where(
+						attention_mask == 1.0,
+						torch.tensor(0.0, dtype=dtype, device=device),
+						torch.tensor(mask_value, dtype=dtype, device=device)
 					)
+					attention_mask = attention_mask.unsqueeze(1)  # [batch, 1, 1+m, prefix_length + 1 + m]
 
 					# Convert tuple to Cache object for model
 					past_cache = self._tuple_to_cache(past_key_values)
 
 					# Forward through model
 					outputs = self.model(
-						evaluated_ids,
+						input_ids,
 						attention_mask=attention_mask,
 						position_ids=position_ids,
 						past_key_values=past_cache,
@@ -1028,7 +1078,7 @@ class ONNXExporter:
 						output_hidden_states=True
 					)
 
-					# Extract hidden states
+					# Extract hidden states: [batch, 1+m, hidden_dim]
 					if hasattr(outputs, 'hidden_states'):
 						hidden_states = outputs.hidden_states[-1]
 					elif isinstance(outputs, dict) and 'hidden_states' in outputs:
@@ -1036,7 +1086,7 @@ class ONNXExporter:
 					else:
 						raise ValueError("Model output does not contain hidden_states")
 
-					# Return only hidden states (cache unchanged)
+					# Return hidden states with m+1 positions (matching TreeLM format)
 					return hidden_states
 
 				# === MODE 3: STANDARD - Compute full sequence, no cache ===
@@ -1498,11 +1548,12 @@ class ONNXExporter:
 			output_names_eval = ['hidden_states']
 
 			# Build dynamic axes
+			# Note: hidden_states output is [batch, eval_len+1, hidden_dim] to match TreeLM format
 			dynamic_axes_eval = {}
 			if dynamic_batch:
 				dynamic_axes_eval['evaluated_ids'] = {0: 'batch_size', 1: 'eval_len'}
 				dynamic_axes_eval['evaluated_mask'] = {0: 'batch_size', 1: 'eval_len', 2: 'eval_len'}
-				dynamic_axes_eval['hidden_states'] = {0: 'batch_size', 1: 'eval_len'}
+				dynamic_axes_eval['hidden_states'] = {0: 'batch_size', 1: 'eval_len_plus_1'}  # m+1 positions
 				for i in range(num_layers):
 					# Cache shape: [batch, num_heads, prefix_len, head_dim]
 					dynamic_axes_eval[f'past_key_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
@@ -1511,7 +1562,7 @@ class ONNXExporter:
 				# Even without dynamic batch, support dynamic sequence lengths
 				dynamic_axes_eval['evaluated_ids'] = {1: 'eval_len'}
 				dynamic_axes_eval['evaluated_mask'] = {1: 'eval_len', 2: 'eval_len'}
-				dynamic_axes_eval['hidden_states'] = {1: 'eval_len'}
+				dynamic_axes_eval['hidden_states'] = {1: 'eval_len_plus_1'}  # m+1 positions
 				for i in range(num_layers):
 					# Cache shape: [batch, num_heads, prefix_len, head_dim]
 					dynamic_axes_eval[f'past_key_{i}'] = {2: 'prefix_len'}
