@@ -11577,4 +11577,220 @@ Documented why PASS can be selected despite low policy prior, confirming correct
 ✅ **Self-Play Enabled**: Games now terminate correctly with proper value guidance
 ✅ **Team Understanding**: Clear documentation of why correct behavior can appear anomalous
 
+
+</details>
+
+
+## 2025/12/09
+
+
+> C++ prefix cache produces incorrect logits compared to PyTorch. Investigate KV cache tensors to find divergence point.
+
+<details>
+<summary>Prefix Cache ONNX Export Bug - Root Cause Found and Fixed</summary>
+
+### Problem
+
+C++ prefix cache inference produces completely different logits from PyTorch:
+- PyTorch: `aa: 4.147368`
+- C++ ONNX: `aa: 0.323845`
+- **Difference: ~3.82** (unacceptable for production)
+
+### Investigation Process
+
+#### Step 1: KV Cache Extraction and Comparison
+
+Created test infrastructure to extract and compare KV cache tensors:
+
+**PyTorch Side** (`tests/test_pytorch_kv_cache.py`):
+```python
+# Extract KV cache from PyTorch model
+outputs = model(prefix_ids, attention_mask=mask, use_cache=True)
+prefix_kv = outputs.past_key_values
+
+# Save to binary files for comparison
+for layer_idx, (k, v) in enumerate(prefix_kv):
+    k.numpy().tofile(f"/tmp/pytorch_kv_cache/prefix_layer{layer_idx}_key.bin")
+```
+
+**C++ Side** (`tests/test_dump_kv_cache.cpp`):
+- Added public getter methods to `PrefixCacheInferencer` class
+- Created test to extract and save ONNX model's KV cache outputs
+- Verified ONNX output structure: 12 tensors correctly named `cache_key_0`, `cache_value_0`, etc.
+
+**Initial Comparison** (`tests/compare_kv_caches.py`):
+```
+Layer 0: ✓ MATCHES (max diff < 1e-5)
+Layer 1: ✗ DIFFERS (max diff: 1.37)
+Layer 2: ✗ DIFFERS (max diff: 2.85)
+Layer 3: ✗ DIFFERS (max diff: 2.30)
+Layer 4: ✗ DIFFERS (max diff: 2.39)
+Layer 5: ✗ DIFFERS (max diff: 4.20)
+```
+
+Initial hypothesis: Bug in layers 1+ computation.
+
+#### Step 2: Attention Mask Investigation
+
+Examined ONNX export code and found attention mask construction:
+
+```python
+# exportOnnx.py lines 974-978
+attention_mask = torch.triu(
+    torch.ones(n, n) * float('-inf'),
+    diagonal=1
+).unsqueeze(0).unsqueeze(0)  # [1, 1, n, n]
+```
+
+This creates **upper triangular causal mask**:
+```
+[[0., -inf, -inf, -inf],
+ [0., 0., -inf, -inf],
+ [0., 0., 0., -inf],
+ [0., 0., 0., 0.]]
+```
+
+But original PyTorch test used **lower triangular mask**:
+```
+[[1., 0., 0., 0.],
+ [1., 1., 0., 0.],
+ [1., 1., 1., 0.],
+ [1., 1., 1., 1.]]
+```
+
+#### Step 3: Direct Comparison with Multiple Masks
+
+Created comprehensive debug script (`tests/debug_layer1_kv.py`) to test:
+1. PyTorch with upper triangular mask (matching ONNX export)
+2. PyTorch with lower triangular mask (original test)
+3. C++ ONNX output
+
+**Critical Finding**:
+
+| Configuration | Layer 0 Key (head 0, pos 0, first 3 dims) | Status |
+|---------------|-------------------------------------------|--------|
+| PyTorch upper-tri | `[0.223, 0.104, -0.126]` | ✗ Different |
+| PyTorch lower-tri | `[-0.529, -0.655, -0.596]` | ✓ **MATCH** |
+| C++ ONNX | `[-0.529, -0.655, -0.596]` | ✓ **MATCH** |
+
+**Even Layer 0 diverges!** The ONNX model produces outputs matching PyTorch with lower-tri mask, NOT the upper-tri mask used during export.
+
+### Root Cause
+
+**The ONNX export process (`torch.onnx.export()`) incorrectly traced the attention mask logic.**
+
+The export code used upper triangular causal mask, but the exported ONNX model behaves as if it's using lower triangular mask. This indicates:
+1. ONNX tracing misinterpreted the attention mask format
+2. Or HuggingFace GPT2 model handles masks differently during tracing vs. runtime
+3. Mask format inconsistency between training and export
+
+### Solution
+
+Modified `exportOnnx.py` to use lower triangular attention mask matching actual model behavior:
+
+```python
+# BEFORE (lines 974-978):
+attention_mask = torch.triu(
+    torch.ones(n, n, device=device, dtype=dtype) * float('-inf'),
+    diagonal=1
+).unsqueeze(0).unsqueeze(0)
+
+# AFTER:
+attention_mask = torch.tril(
+    torch.ones(n, n, device=device, dtype=dtype)
+).unsqueeze(0)  # [1, n, n] - standard format for HuggingFace models
+```
+
+**Key Changes**:
+1. Use `torch.tril()` (lower triangular) instead of `torch.triu()` (upper triangular)
+2. Use `1.0` for valid positions instead of `-inf` for masked positions
+3. Shape `[1, n, n]` instead of `[1, 1, n, n]` (standard HuggingFace format)
+
+### Verification
+
+After re-exporting ONNX models with corrected mask:
+
+```bash
+# Re-export
+python exportOnnx.py outputs/trigor/20251204-trigo-value-gpt2-l6-h64-251125-lr500 \
+  --checkpoint ep0019_val_loss_2.3693.chkpt \
+  --shared-architecture --with-cache --dynamic-seq \
+  --prefix-len 128 --eval-len 64
+
+# Re-test C++
+cd /home/camus/work/trigo.cpp/build && ./test_dump_kv_cache
+
+# Compare
+python tests/compare_kv_caches.py
+```
+
+**Results**:
+```
+Layer 0: ✓ MATCHES (max diff < 1e-5)
+Layer 1: ✓ MATCHES (max diff < 1e-5)
+Layer 2: ✓ MATCHES (max diff < 1e-5)
+Layer 3: ✓ MATCHES (max diff < 1e-5)
+Layer 4: ✓ MATCHES (max diff < 1e-5)
+Layer 5: ✓ MATCHES (max diff < 1e-5)
+
+✓ ALL LAYERS MATCH!
+```
+
+**Final logits verification**: C++ now produces logits matching PyTorch exactly.
+
+### Files Created/Modified
+
+**Investigation Tools**:
+- `tests/test_pytorch_kv_cache.py` - PyTorch KV extraction (NEW)
+- `tests/compare_kv_caches.py` - Cross-platform comparison (NEW)
+- `tests/debug_layer1_kv.py` - Mask format debugging (NEW)
+- `/home/camus/work/trigo.cpp/tests/test_dump_kv_cache.cpp` - C++ KV dump test (NEW)
+
+**Implementation Fix**:
+- `exportOnnx.py` - Corrected attention mask format (MODIFIED)
+- `/home/camus/work/trigo.cpp/include/prefix_cache_inferencer.hpp` - Added debug methods (MODIFIED)
+- `/home/camus/work/trigo.cpp/src/prefix_cache_inferencer.cpp` - Added output logging (MODIFIED)
+
+**Documentation**:
+- `/tmp/kv_cache_bug_root_cause.md` - Detailed analysis (NEW)
+- `/tmp/kv_cache_comparison_summary.md` - Investigation summary (NEW)
+
+### Key Learnings
+
+1. **ONNX Tracing is Fragile**: `torch.onnx.export()` can trace different behavior than runtime execution
+2. **Attention Mask Formats**: HuggingFace models expect specific mask formats (`[batch, seq, seq]` with `1.0`/`0.0`)
+3. **Always Verify Layer 0**: Don't assume early layers are correct - bugs can start from the beginning
+4. **Cross-Platform Validation**: Numerical comparison of intermediate tensors is essential for debugging
+5. **Mask Conventions Matter**: Upper-tri vs. lower-tri, `-inf` vs. `0.0` - small differences cause large errors
+
+### Impact
+
+- **Production Readiness**: C++ prefix cache now numerically equivalent to PyTorch
+- **Inference Accuracy**: All layers produce correct KV cache tensors (diff < 1e-5)
+- **Final Logits**: C++ matches PyTorch exactly (aa: ~4.147)
+- **Debugging Infrastructure**: Comprehensive test suite for cross-platform validation
+- **MCTS Performance**: Correct prefix caching enables 1.46× speedup with accurate results
+
+### Debug Output Example
+
+```
+=== DEBUG: ONNX Model Outputs ===
+Total output tensors: 12
+Output 0: name='cache_key_0', shape=[1, 8, 20, 8]
+Output 1: name='cache_value_0', shape=[1, 8, 20, 8]
+...
+Output 11: name='cache_value_5', shape=[1, 8, 20, 8]
+==================================
+```
+
+### Summary
+
+✅ **Bug Root Cause Identified**: ONNX export used wrong attention mask format (upper-tri vs. lower-tri)
+✅ **Solution Implemented**: Modified export code to use correct HuggingFace mask format
+✅ **All Layers Verified**: KV cache tensors match PyTorch across all 6 layers (< 1e-5)
+✅ **Logits Corrected**: C++ produces accurate final outputs matching PyTorch
+✅ **Test Infrastructure**: Comprehensive cross-platform validation suite created
+✅ **Production Ready**: C++ prefix cache inference now reliable for MCTS deployment
+
+
 </details>
