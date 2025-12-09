@@ -971,10 +971,17 @@ class ONNXExporter:
 					# Position IDs: [0, 1, 2, ..., n-1]
 					position_ids = torch.arange(n, device=device).unsqueeze(0).expand(batch_size, -1)
 
-					# Attention mask: causal mask for prefix
-					attention_mask = torch.triu(
-						torch.ones(n, n, device=device, dtype=dtype) * float('-inf'),
-						diagonal=1
+					# Attention mask: lower triangular causal mask
+					# NOTE: Use tril (lower triangular) for compatibility with traced ONNX behavior
+					# Shape: [1, 1, n, n] with 0.0 for valid, -inf for masked
+					attention_mask = torch.tril(
+						torch.ones(n, n, device=device, dtype=dtype)
+					)
+					# Convert to log-space: 1.0 → 0.0, 0.0 → -inf
+					attention_mask = torch.where(
+						attention_mask == 1.0,
+						torch.tensor(0.0, dtype=dtype, device=device),
+						torch.tensor(float('-inf'), dtype=dtype, device=device)
 					).unsqueeze(0).unsqueeze(0)  # [1, 1, n, n]
 
 					# Forward through model
