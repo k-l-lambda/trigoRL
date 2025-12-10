@@ -12486,3 +12486,89 @@ Longer test reached 500 moves with diverse gameplay and strategic passes only at
 - `trigo.cpp/include/cached_mcts.hpp` - Fixed `game_to_tokens()` to add move number prefix
 
 </details>
+
+
+> MCTS code review and improvements using LLM subagents (GPT-5.1, Gemini-3-Pro). Memory optimization for TypeScript MCTS. C++ vs TypeScript MCTS comparison and Dirichlet noise implementation.
+
+<details>
+<summary>MCTS improvements and cross-implementation analysis</summary>
+
+### LLM-Assisted Code Review
+
+Used `other-mcp` tool to conduct code reviews with multiple LLM models:
+
+**GPT-5.1 Review of TypeScript mctsAgent.ts:**
+- Identified terminal value caching opportunity (performance)
+- Found 0-simulations edge case in `selectPlayAction` (potential bug)
+- Suggested documentation improvement for `decodeAction`
+
+**Gemini-3-Pro Review:**
+- Identified value scale mismatch concern (analyzed as design choice, not bug)
+- Found missing double-pass terminal detection (real bug)
+- Suggested memory optimization via state cloning reduction
+- Noted lack of NN evaluation batching (performance)
+
+### TypeScript MCTS Fixes (mctsAgent.ts)
+
+1. **Memory Optimization (Scheme A)**:
+   - Changed `MCTSNode.state` from `TrigoGame` to `TrigoGame | null`
+   - Only root node stores game state now
+   - Each simulation clones root state once, mutates along path
+   - Memory savings: ~95% (from O(nodes) to O(simulations))
+
+2. **Terminal Detection Improvements**:
+   - Added `checkTerminal()` helper method with proper ordering:
+     1. Check `gameStatus === "finished"` (cheapest - handles double-pass)
+     2. Check 50% coverage + neutral === 0 (expensive territory calculation)
+   - Added `calculateTerminalValue()` helper to eliminate code duplication
+   - Formula: `sign(score) * (1 + log(|score|))` (white-positive)
+
+3. **Edge Case Fixes**:
+   - Added root state null check with assertion in `runSimulation`
+   - Added fallback to priors when `actionKeys.length === 0`
+
+### C++ vs TypeScript MCTS Comparison
+
+Detailed analysis revealed the two implementations use **different but mathematically equivalent** conventions:
+
+| Aspect | C++ | TypeScript |
+|--------|-----|------------|
+| Value convention | Current-player-positive | White-positive |
+| Backup | Flip sign each step | No flip |
+| PUCT | Always `Q + U` | `(isWhite ? Q : -Q) + U` |
+| Policy priors | Uniform (1.0f) | NN policy network |
+| Dirichlet noise | None (before fix) | Applied at root |
+
+**Key Finding**: C++ MCTS was NOT using the policy network - only value network was utilized. The tree model (policy) was completely unused, resulting in uniform exploration instead of NN-guided search.
+
+### C++ Dirichlet Noise Implementation (mcts.hpp)
+
+Added Dirichlet noise to C++ MCTS for root exploration:
+
+1. **New Parameters**:
+   - `dirichlet_alpha` (default: 0.03 for Go-like games)
+   - `dirichlet_epsilon` (default: 0.25 mixing weight)
+
+2. **Gamma Sampling** (Marsaglia & Tsang method):
+   - Handles alpha < 1 via transformation: `Gamma(α) = Gamma(α+1) * U^(1/α)`
+   - Standard M&T algorithm for alpha >= 1
+
+3. **Application Timing**:
+   - Applied after root is fully expanded (differs from TS which applies on first expansion)
+   - Uses flag `dirichlet_applied` to ensure one-time application
+   - Formula: `P(s,a) ← (1 - ε) * P(s,a) + ε * η_a` where `η ~ Dir(α)`
+
+### Implementation Difference Note
+
+The timing of Dirichlet noise application differs between implementations:
+- **TypeScript**: Applies noise when `node.parent === null` during first expansion
+- **C++**: Applies noise after `root->is_fully_expanded` becomes true
+
+GPT-5.1 confirmed this is a behavioral difference (not a bug) that affects early simulations but converges for large simulation counts.
+
+### Next Steps
+
+- Integrate policy network into C++ MCTS (currently using uniform priors)
+- Consider aligning value conventions between C++ and TypeScript for easier debugging
+
+</details>
