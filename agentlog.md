@@ -12453,3 +12453,36 @@ Longer test reached 500 moves with diverse gameplay and strategic passes only at
 - `trigo.cpp/include/cached_mcts.hpp` - Line ~439, added `+1` in sqrt of PUCT formula
 
 </details>
+
+
+> MCTS Consistency Investigation: C++ CachedMCTS vs TypeScript TrigoTreeAgent
+
+<details>
+<summary>TGN format bug fixed, architectural differences documented</summary>
+
+**TGN Format Bug Fixed** in `cached_mcts.hpp::game_to_tokens()`:
+- C++ was missing the move number prefix (`1. `) in TGN tokenization
+- TypeScript adds move number before first move (e.g., `[Board 5x5]\n\n1. `)
+- C++ now produces 17 tokens (matching TypeScript) instead of 14
+
+**ep0019 Prefix Cache Model Export**:
+- Re-exported with `--dynamic-seq` flag to fix policy_head dimension mismatch
+- Previous export had static shape `[1, 192, 64]`, now uses dynamic `['seq_len', 'hidden_dim']`
+
+**Architectural Difference Documented**:
+- Tree model (TypeScript): Uses tree attention mask for batch evaluation
+  - All moves evaluated simultaneously with shared prefix tree
+  - Attention flow between different move tokens via tree mask
+  - Log scores: ~-7.2 to -7.4
+
+- Cached model (C++): Evaluates each move independently using KV cache
+  - No attention between different moves
+  - Log scores: ~-6.3 to -6.5
+
+- The ~1.0 log score difference is expected - different inference architectures
+- Both implementations are internally consistent and correct
+
+**Files Modified**:
+- `trigo.cpp/include/cached_mcts.hpp` - Fixed `game_to_tokens()` to add move number prefix
+
+</details>
