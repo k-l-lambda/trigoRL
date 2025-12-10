@@ -12158,3 +12158,79 @@ Total removed: **20 files** (8 TypeScript + 12 Python)
 Total kept: **~35 files** of long-term value
 
 </details>
+
+
+<details>
+<summary>Fixed C++ MCTS value inference discrepancy - games now play 250+ moves</summary>
+
+### Problem
+
+2D board (5x5x1) self-play games ended after just 2 moves with "Pass Pass". TypeScript version worked correctly (30-40 moves), confirming this was not a model issue.
+
+### Root Cause Analysis
+
+Discovered that the **prefix cache architecture produces fundamentally different value estimates** compared to the EvaluationLM model:
+
+| Model | After "Black Pass" | Interpretation |
+|-------|-------------------|----------------|
+| C++ prefix cache | -0.234 | Black advantage |
+| TypeScript EvaluationLM | +0.114 | White slight advantage |
+
+**Difference: 0.348** - This caused MCTS to incorrectly evaluate positions, leading to Pass being selected despite having near-zero prior (0.000004).
+
+The architectural difference:
+- **EvaluationLM**: VALUE token attends to actual TGN tokens directly
+- **Prefix cache**: VALUE token attends to dummy token + cached KV states (different attention pattern)
+
+### Solution
+
+Modified C++ code to use the **direct evaluation model** for value inference instead of prefix cache:
+
+1. **`prefix_cache_inferencer.hpp`**: Added `evaluation_model_path` constructor parameter and `has_evaluation_model()` method
+
+2. **`prefix_cache_inferencer.cpp`**: Added `value_inference_direct()` method:
+```cpp
+float PrefixCacheInferencer::value_inference_direct(
+    const std::vector<int64_t>& input_ids,
+    int batch_size,
+    int seq_len
+)
+```
+
+3. **`cached_mcts.hpp`**: Modified `evaluate_with_cache()` to prefer direct evaluation:
+```cpp
+if (inferencer->has_evaluation_model())
+{
+    // Build full sequence: START + TGN + END (padded to 256)
+    value = inferencer->value_inference_direct(eval_tokens, 1, SEQ_LEN);
+}
+else
+{
+    // Fallback to cached value inference
+    value = inferencer->value_inference_with_cache(3);
+}
+```
+
+4. **`self_play_policy.hpp`**: Auto-derive evaluation model path from cache model path:
+```cpp
+// Pattern: /path/to/MODEL_shared_cached/ → /path/to/MODEL_evaluation.onnx
+std::string eval_model_path = clean_path.substr(0, pos) + "_evaluation.onnx";
+```
+
+### Files Modified
+
+- `trigo.cpp/include/prefix_cache_inferencer.hpp`
+- `trigo.cpp/src/prefix_cache_inferencer.cpp`
+- `trigo.cpp/include/cached_mcts.hpp`
+- `trigo.cpp/include/self_play_policy.hpp`
+
+### Result
+
+| Metric | Before | After |
+|--------|--------|-------|
+| 2D board game length | 2 moves ("Pass Pass") | 250+ moves |
+| Game outcome | Invalid | Score: +9 |
+
+The fix correctly loads the evaluation model and uses it for MCTS value inference, producing game-play behavior matching the TypeScript implementation.
+
+</details>
