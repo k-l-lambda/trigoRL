@@ -12572,3 +12572,135 @@ GPT-5.1 confirmed this is a behavioral difference (not a bug) that affects early
 - Consider aligning value conventions between C++ and TypeScript for easier debugging
 
 </details>
+
+---
+
+## Phase 5.8 - C++ MCTS Consistency with TypeScript ✅
+
+<details>
+<summary>Click to expand details</summary>
+
+### Overview
+
+Completed **Phase 5.8: C++ vs TypeScript MCTS Consistency** - Aligned C++ `cached_mcts.hpp` with TypeScript `mctsAgent.ts` to ensure identical behavior. All changes reviewed and approved by GPT-5.1.
+
+### Changes Made
+
+#### 1. Terminal State Detection (HIGH priority) ✅
+
+Added ground-truth terminal value calculation to match TypeScript:
+
+**New functions in `cached_mcts.hpp`**:
+- `checkTerminal(TrigoGame& game)` - Detects terminal states:
+  - Checks `GameStatus::FINISHED` (double-pass, resignation)
+  - Checks coverage > 50% AND neutral == 0 (natural end)
+- `calculateTerminalValue(TerritoryResult&)` - Computes value from territory:
+  - Formula: `sign(scoreDiff) * (1 + log(|scoreDiff|))`
+  - Matches training formula from `valueCausalLoss.py`
+
+**Modified `search()` evaluation**:
+```cpp
+auto terminal_value = checkTerminal(game_copy);
+if (terminal_value.has_value()) {
+    value = terminal_value.value();  // Ground-truth
+} else {
+    value = evaluate_with_cache(game_copy);  // NN inference
+}
+```
+
+Created test file: `test_terminal_detection.cpp` - All tests pass.
+
+#### 2. Zero-Prior Move Penalty (MEDIUM priority) ✅
+
+Removed `-1000` penalty for moves with `prior <= 1e-6` in `select_best_puct_child()`:
+
+**Before**:
+```cpp
+if (child->prior_prob <= 1e-6f)
+    score -= 1000.0f;  // Heavy penalty
+```
+
+**After**: No penalty - allows Q to drive selection for low-prior moves (matches TypeScript).
+
+#### 3. Expansion First-Child Selection (LOW priority) ✅
+
+Changed from prior-weighted random sampling to deterministic highest-prior selection:
+
+**Before**:
+```cpp
+std::discrete_distribution<size_t> dist(priors.begin(), priors.end());
+size_t idx = dist(rng);
+```
+
+**After**:
+```cpp
+// Select highest-prior child deterministically
+// Matches TypeScript PUCT with all N=0 (picks highest P)
+size_t best_idx = 0;
+float best_prior = node->children[0]->prior_prob;
+for (size_t i = 1; i < node->children.size(); i++) {
+    if (node->children[i]->prior_prob > best_prior) {
+        best_prior = node->children[i]->prior_prob;
+        best_idx = i;
+    }
+}
+```
+
+#### 4. Root Visit Count Initialization (LOW priority) ✅
+
+Removed `root->visit_count = 1` initialization:
+
+**Before**: `root->visit_count = 1` → Initial U = `c * P * sqrt(2)`
+**After**: `root->visit_count = 0` (default) → Initial U = `c * P * sqrt(1)` = `c * P`
+
+Matches TypeScript where `totalN = sum(N values) = 0` initially.
+
+#### 5. Temperature-based Move Selection (LOW priority) ✅
+
+Added temperature parameter for training exploration:
+
+**New API**:
+```cpp
+PolicyAction search(const TrigoGame& game, float temperature = 0.0f)
+```
+
+**Implementation**:
+- `temperature < 0.01`: Greedy argmax (deterministic)
+- `temperature >= 0.01`: Sample from `N^(1/τ)` distribution
+- Formula: `π(a|s) ∝ N(s,a)^(1/τ)`
+- Matches TypeScript `selectPlayAction()` exactly
+
+### GPT-5.1 Review Summary
+
+Session `7e57d58f-a0d3-49ff-9291-f4f48ded3c60` reviewed all 5 changes:
+
+| Change | Review Result |
+|--------|---------------|
+| Terminal detection | ✅ Logic matches TypeScript exactly |
+| Zero-prior penalty | ✅ Matches AlphaZero-style PUCT |
+| First-child selection | ✅ Deterministic, matches TS |
+| Root visit count | ✅ Removes off-by-sqrt(2) mismatch |
+| Temperature sampling | ✅ Same formula and cutoffs as TS |
+
+### Files Modified
+
+- `/home/camus/work/trigo.cpp/include/cached_mcts.hpp` - Main MCTS implementation
+- `/home/camus/work/trigo.cpp/docs/PLAN.md` - Updated Phase 5.8 documentation
+- `/home/camus/work/trigo.cpp/tests/test_terminal_detection.cpp` - New test file
+- `/home/camus/work/trigo.cpp/CMakeLists.txt` - Added test_terminal_detection target
+
+### Result
+
+C++ `cached_mcts.hpp` is now **fully consistent** with TypeScript `mctsAgent.ts`:
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Terminal detection | NN only | Ground-truth + NN |
+| Zero-prior handling | -1000 penalty | No penalty |
+| First-child selection | Random weighted | Deterministic highest-P |
+| Root visit count | 1 | 0 |
+| Temperature support | No | Yes |
+
+All tests pass. Phase 5.8 complete.
+
+</details>
