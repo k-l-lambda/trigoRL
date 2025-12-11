@@ -925,7 +925,7 @@ class ONNXExporter:
 				past_key_values = None,
 			):
 				"""
-				Forward pass with tree attention supporting three modes.
+				Forward pass with tree attention supporting four modes.
 
 				Mode 1: standard (no cache)
 				  Input: prefix_ids [batch, n], evaluated_ids [batch, m], evaluated_mask [batch, m, m]
@@ -939,13 +939,19 @@ class ONNXExporter:
 
 				Mode 3: eval_cached (reuse fixed cache)
 				  Input: evaluated_ids [batch, m], evaluated_mask [batch, m, m], past_key_values (cache)
-				  Output: hidden_states [batch, m, hidden]
+				  Output: hidden_states [batch, m+1, hidden]
 				  Use: MCTS - evaluate moves with fixed prefix cache (cache unchanged)
+
+				Mode 4: eval_extend (extend cache with new tokens)
+				  Input: evaluated_ids [batch, m], evaluated_mask [batch, m, m], past_key_values (cache)
+				  Output: (hidden_states [batch, m+1, hidden], new_cache tuple)
+				  Use: Incremental cache - extend prefix with new tokens, returns updated cache
 
 				Mode selection (if self.mode == 'auto'):
 				  - prefix_only: evaluated_ids is None
 				  - eval_cached: past_key_values is not None
 				  - standard: otherwise
+				  Note: auto mode cannot distinguish eval_cached from eval_extend, use explicit mode
 				"""
 				# Determine execution mode
 				if self.mode == 'auto':
@@ -997,13 +1003,15 @@ class ONNXExporter:
 					# Return only cache (no hidden states needed)
 					return self._cache_to_tuple(outputs.past_key_values)
 
-				# === MODE 2: EVAL_CACHED - Use fixed cache, compute evaluated ===
+				# === MODE 2: EVAL_CACHED / EVAL_EXTEND - Use cache for evaluation ===
 				# IMPORTANT: Returns m+1 hidden states to match TreeLM output format:
 				#   - Position 0: hidden state for prefix's last position (n-1)
 				#   - Positions 1..m: hidden states for evaluated positions 0..m-1
-				elif actual_mode == 'eval_cached':
+				# eval_cached: cache unchanged (use_cache=False)
+				# eval_extend: cache updated with new tokens (use_cache=True)
+				elif actual_mode in ('eval_cached', 'eval_extend'):
 					if evaluated_ids is None or evaluated_mask is None or past_key_values is None:
-						raise ValueError("eval_cached mode requires evaluated_ids, evaluated_mask, and past_key_values")
+						raise ValueError(f"{actual_mode} mode requires evaluated_ids, evaluated_mask, and past_key_values")
 
 					batch_size, m = evaluated_ids.shape
 					prefix_length = self._get_cache_length(past_key_values)
@@ -1050,10 +1058,11 @@ class ONNXExporter:
 					# Rows 1..m (evaluated): attend to all prefix + evaluated per mask
 					# They should attend to:
 					# - All cached prefix (positions 0:prefix_length)
-					# - The dummy prefix last token (position prefix_length)
 					# - Other evaluated tokens per evaluated_mask
+					# NOTE: Do NOT attend to the dummy token (position prefix_length)
+					# This ensures consistency with compute_prefix_cache + extend
 					attention_mask[:, 1:, :prefix_length] = 1.0  # All prefix
-					attention_mask[:, 1:, prefix_length] = 1.0  # The dummy prefix last token
+					# Skip attending to dummy token at position prefix_length
 					attention_mask[:, 1:, prefix_length + 1:] = evaluated_mask  # Other evaluated
 
 					# Convert to log-space (-inf for masked positions)
@@ -1069,12 +1078,15 @@ class ONNXExporter:
 					past_cache = self._tuple_to_cache(past_key_values)
 
 					# Forward through model
+					# eval_cached: use_cache=False (cache unchanged)
+					# eval_extend: use_cache=True (cache updated with new tokens)
+					use_cache_flag = (actual_mode == 'eval_extend')
 					outputs = self.model(
 						input_ids,
 						attention_mask=attention_mask,
 						position_ids=position_ids,
 						past_key_values=past_cache,
-						use_cache=False,  # Don't update cache in eval_cached mode
+						use_cache=use_cache_flag,
 						output_hidden_states=True
 					)
 
@@ -1086,8 +1098,29 @@ class ONNXExporter:
 					else:
 						raise ValueError("Model output does not contain hidden_states")
 
-					# Return hidden states with m+1 positions (matching TreeLM format)
-					return hidden_states
+					# eval_cached: Return only hidden states (cache unchanged)
+					# eval_extend: Return hidden states AND updated cache
+					if actual_mode == 'eval_extend':
+						# IMPORTANT: Remove the dummy token from the returned cache
+						# The model received [dummy, eval_0, ..., eval_m-1] as input
+						# So the cache now has shape [batch, heads, prefix_len + 1 + m, head_dim]
+						# We need to remove position prefix_len (the dummy token) to get
+						# [batch, heads, prefix_len + m, head_dim]
+						raw_cache = outputs.past_key_values
+						trimmed_cache = []
+						for layer_kv in raw_cache:
+							# layer_kv is (key, value), each with shape [batch, heads, seq_len, head_dim]
+							key, value = layer_kv
+							# Remove the dummy token at position prefix_length
+							# Cache contains: [0:prefix_length] (old prefix) + [prefix_length] (dummy) + [prefix_length+1:] (new tokens)
+							# We want: [0:prefix_length] + [prefix_length+1:] (skip dummy)
+							key_trimmed = torch.cat([key[:, :, :prefix_length, :], key[:, :, prefix_length+1:, :]], dim=2)
+							value_trimmed = torch.cat([value[:, :, :prefix_length, :], value[:, :, prefix_length+1:, :]], dim=2)
+							trimmed_cache.append((key_trimmed, value_trimmed))
+						new_cache = tuple(trimmed_cache)
+						return hidden_states, new_cache
+					else:
+						return hidden_states
 
 				# === MODE 3: STANDARD - Compute full sequence, no cache ===
 				else:  # standard mode
@@ -1395,6 +1428,7 @@ class ONNXExporter:
 		# ========================================
 		base_model_prefix_path = None
 		base_model_eval_cached_path = None
+		base_model_eval_extend_path = None
 
 		if with_cache:
 			logger.info("\n" + "=" * 80)
@@ -1595,23 +1629,146 @@ class ONNXExporter:
 				logger.error(f"✗ Eval-cached model export failed: {e}")
 				raise
 
+			# ========================================
+			# 6. Export Eval-Extend Model (Optional)
+			# ========================================
+			logger.info("\n" + "=" * 80)
+			logger.info("[6/6] Exporting eval-extend model (cache + new tokens → hidden + updated cache)...")
+
+			base_model_eval_extend_path = str(output_dir / "base_model_eval_extend.onnx")
+
+			# Create wrapper for eval-extend mode
+			class EvalExtendWrapper(nn.Module):
+				"""Wrapper that extends cache with new tokens."""
+				def __init__(self, base_model, num_layers):
+					super().__init__()
+					self.base = BaseModelWithTreeAttention(base_model, mode='eval_extend')
+					self.num_layers = num_layers
+
+				def forward(self, evaluated_ids, evaluated_mask, *past_kv_flat):
+					# Reconstruct cache tuple from flat inputs
+					past_key_values = tuple([
+						(past_kv_flat[i*2], past_kv_flat[i*2+1])
+						for i in range(self.num_layers)
+					])
+
+					# Forward through eval-extend model
+					hidden_states, new_cache = self.base(
+						evaluated_ids=evaluated_ids,
+						evaluated_mask=evaluated_mask,
+						past_key_values=past_key_values
+					)
+
+					# Flatten new cache for output
+					cache_flat = []
+					for key, value in new_cache:
+						cache_flat.extend([key, value])
+
+					return (hidden_states, *cache_flat)
+
+			eval_extend_wrapper = EvalExtendWrapper(base_model, num_layers)
+			eval_extend_wrapper.eval()
+
+			# Create dummy inputs (same as eval_cached)
+			dummy_evaluated_ids_ext = torch.randint(0, vocab_size, (batch_size, eval_len), dtype=torch.long)
+			dummy_evaluated_mask_ext = create_causal_evaluated_mask(eval_len).expand(batch_size, -1, -1).float()
+
+			# Create dummy cache tensors (same as eval_cached)
+			dummy_cache_ext = []
+			for i in range(num_layers):
+				dummy_cache_ext.append(torch.zeros(batch_size, num_heads, prefix_len, head_dim, dtype=torch.float32))
+				dummy_cache_ext.append(torch.zeros(batch_size, num_heads, prefix_len, head_dim, dtype=torch.float32))
+
+			logger.info(f"  Input shapes:")
+			logger.info(f"    evaluated_ids={dummy_evaluated_ids_ext.shape}")
+			logger.info(f"    evaluated_mask={dummy_evaluated_mask_ext.shape}")
+			logger.info(f"    cache: {num_layers} layers × 2 tensors × [{batch_size}, {num_heads}, {prefix_len}, {head_dim}]")
+
+			# Build input names (same as eval_cached)
+			input_names_extend = ['evaluated_ids', 'evaluated_mask']
+			for i in range(num_layers):
+				input_names_extend.extend([f'past_key_{i}', f'past_value_{i}'])
+
+			# Build output names: hidden_states + present cache
+			output_names_extend = ['hidden_states']
+			for i in range(num_layers):
+				output_names_extend.extend([f'present_key_{i}', f'present_value_{i}'])
+
+			# Build dynamic axes
+			# Hidden states: [batch, eval_len+1, hidden_dim]
+			# Present cache: [batch, num_heads, prefix_len+eval_len+1, head_dim]
+			dynamic_axes_extend = {}
+			if dynamic_batch:
+				dynamic_axes_extend['evaluated_ids'] = {0: 'batch_size', 1: 'eval_len'}
+				dynamic_axes_extend['evaluated_mask'] = {0: 'batch_size', 1: 'eval_len', 2: 'eval_len'}
+				dynamic_axes_extend['hidden_states'] = {0: 'batch_size', 1: 'eval_len_plus_1'}
+				for i in range(num_layers):
+					# Input cache: [batch, num_heads, prefix_len, head_dim]
+					dynamic_axes_extend[f'past_key_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
+					dynamic_axes_extend[f'past_value_{i}'] = {0: 'batch_size', 2: 'prefix_len'}
+					# Output cache: [batch, num_heads, new_prefix_len, head_dim]
+					dynamic_axes_extend[f'present_key_{i}'] = {0: 'batch_size', 2: 'new_prefix_len'}
+					dynamic_axes_extend[f'present_value_{i}'] = {0: 'batch_size', 2: 'new_prefix_len'}
+			else:
+				# Even without dynamic batch, support dynamic sequence lengths
+				dynamic_axes_extend['evaluated_ids'] = {1: 'eval_len'}
+				dynamic_axes_extend['evaluated_mask'] = {1: 'eval_len', 2: 'eval_len'}
+				dynamic_axes_extend['hidden_states'] = {1: 'eval_len_plus_1'}
+				for i in range(num_layers):
+					dynamic_axes_extend[f'past_key_{i}'] = {2: 'prefix_len'}
+					dynamic_axes_extend[f'past_value_{i}'] = {2: 'prefix_len'}
+					dynamic_axes_extend[f'present_key_{i}'] = {2: 'new_prefix_len'}
+					dynamic_axes_extend[f'present_value_{i}'] = {2: 'new_prefix_len'}
+
+			# Export eval-extend model
+			try:
+				import warnings
+				with warnings.catch_warnings():
+					warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+					warnings.filterwarnings("ignore", category=UserWarning)
+
+					torch.onnx.export(
+						eval_extend_wrapper,
+						(dummy_evaluated_ids_ext, dummy_evaluated_mask_ext, *dummy_cache_ext),
+						base_model_eval_extend_path,
+						input_names=input_names_extend,
+						output_names=output_names_extend,
+						dynamic_axes=dynamic_axes_extend if dynamic_axes_extend else None,
+						opset_version=opset_version,
+						do_constant_folding=True,
+						export_params=True,
+						dynamo=False,
+					)
+
+				file_size_mb = Path(base_model_eval_extend_path).stat().st_size / (1024 * 1024)
+				logger.info(f"  ✓ Eval-extend model exported: {file_size_mb:.2f} MB")
+
+			except Exception as e:
+				logger.error(f"✗ Eval-extend model export failed: {e}")
+				raise
+
 		# ========================================
 		# Summary
 		# ========================================
 		logger.info("\n" + "=" * 80)
 		if with_cache:
-			logger.info("Export Complete - 5 Models Created (MCTS Prefix Cache Mode):")
+			logger.info("Export Complete - 6 Models Created (MCTS Prefix Cache Mode):")
 			logger.info("=" * 80)
 			logger.info(f"  1. {base_model_path} (standard - no cache)")
 			logger.info(f"  2. {base_model_prefix_path} (prefix-only - compute cache)")
 			logger.info(f"  3. {base_model_eval_cached_path} (eval-cached - reuse fixed cache)")
-			logger.info(f"  4. {policy_head_path} (policy head)")
-			logger.info(f"  5. {value_head_path} (value head)")
+			logger.info(f"  4. {base_model_eval_extend_path} (eval-extend - extend cache with new tokens)")
+			logger.info(f"  5. {policy_head_path} (policy head)")
+			logger.info(f"  6. {value_head_path} (value head)")
 			logger.info("\nMCTS Prefix Cache Workflow:")
 			logger.info("  Step 1: prefix_model(prefix_ids) → cache")
 			logger.info("  Step 2: eval_cached_model(evaluated_ids, mask, cache) → hidden_states (cache unchanged)")
 			logger.info("  Step 3: Repeat step 2 for multiple move evaluations (reuse same cache)")
 			logger.info("  Step 4: policy_head(hidden_states) → logits, value_head(hidden_states) → value")
+			logger.info("\nIncremental Cache Workflow (eval_extend):")
+			logger.info("  Step 1: prefix_model(prefix_ids) → cache")
+			logger.info("  Step 2: eval_extend_model(new_ids, mask, cache) → hidden_states, new_cache")
+			logger.info("  Step 3: Use new_cache for subsequent operations (cache grows incrementally)")
 		else:
 			logger.info("Export Complete - 3 Models Created (Standard Mode):")
 			logger.info("=" * 80)
@@ -1622,7 +1779,7 @@ class ONNXExporter:
 		logger.info("=" * 80)
 
 		if with_cache:
-			return base_model_path, base_model_prefix_path, base_model_eval_cached_path, policy_head_path, value_head_path
+			return base_model_path, base_model_prefix_path, base_model_eval_cached_path, base_model_eval_extend_path, policy_head_path, value_head_path
 		else:
 			return base_model_path, policy_head_path, value_head_path
 

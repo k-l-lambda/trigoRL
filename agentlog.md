@@ -12801,3 +12801,83 @@ GPT-5.1 reviewed the fix and confirmed:
 
 </details>
 
+
+---
+
+## Phase 5.10 - Incremental KV Cache for Self-Play ✅ (Partial Success)
+
+> Implemented incremental cache extension for self-play, but benchmarks revealed prefix cache approach is fundamentally incompatible with MCTS.
+
+<details>
+<summary>Click to expand details</summary>
+
+### Overview
+
+Implemented a new `eval_extend` mode in Python and C++ to support incremental KV cache extension between moves. The goal was to avoid recomputing the full prefix cache for each MCTS search.
+
+### Implementation Completed
+
+**Python (trigoRL):**
+1. Added `eval_extend` mode to `BaseModelWithTreeAttention` in `exportOnnx.py`
+2. Created `EvalExtendWrapper` class for ONNX export
+3. Now exports 6 models with `--with-cache`: base, prefix, eval_cached, **eval_extend**, policy, value
+4. Created `tests/test_eval_extend_equivalence.py` - all tests pass
+
+**C++ (trigo.cpp):**
+1. Added `extend_cache()` method to `PrefixCacheInferencer`
+2. Added `has_extend_model()` helper
+3. Created `IncrementalCachedMCTSPolicy` class in `self_play_policy.hpp`
+4. Created `test_extend_cache.cpp` - all tests pass
+
+### Benchmark Results
+
+| Policy | Time (3 games) | Time/Game | vs alphazero |
+|--------|---------------|-----------|--------------|
+| **alphazero** | 12s | 4s | 1× (baseline) |
+| **cached-mcts** | 216s | 72s | 18× slower |
+| **incremental-mcts** | 278s | 93s | 23× slower |
+
+### Key Finding: Prefix Cache Doesn't Help MCTS
+
+The prefix cache approach **fundamentally conflicts with MCTS tree search**:
+
+1. **Within MCTS**: Each simulation explores a different branch
+   - Different branches need different cache states
+   - Cache can't be shared across branches
+   - Must recompute prefix for each branch
+
+2. **Between moves**: Cache can be extended incrementally
+   - But within each MCTS search, we still recompute for each branch
+   - The incremental benefit is minimal vs per-search overhead
+
+3. **Overhead**: PrefixCacheInferencer has more overhead than SharedModelInferencer
+   - Multiple model loading (prefix + eval_cached + eval_extend)
+   - Cache management complexity
+   - No actual cache reuse within MCTS tree
+
+### Conclusion
+
+The prefix cache optimization is **NOT suitable for MCTS**.
+
+**Recommendation**: Use `alphazero` policy for all production workloads.
+
+**Future alternatives** (if pursuing cache optimization):
+- Batch leaf evaluation: Collect all leaves, evaluate in batch
+- Tree-based caching: Store cache states per node (high memory cost)
+- Different search algorithm: Beam search (linear) instead of MCTS (tree)
+
+### Files Modified
+
+**Python:**
+- `exportOnnx.py` - Added eval_extend mode
+- `tests/test_eval_extend_equivalence.py` - New test file
+
+**C++:**
+- `include/prefix_cache_inferencer.hpp` - Added extend_cache()
+- `src/prefix_cache_inferencer.cpp` - Implemented extend_cache()
+- `include/self_play_policy.hpp` - Added IncrementalCachedMCTSPolicy
+- `tests/test_extend_cache.cpp` - New test file
+- `docs/PLAN.md` - Updated with findings
+
+</details>
+
