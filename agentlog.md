@@ -12881,3 +12881,56 @@ The prefix cache optimization is **NOT suitable for MCTS**.
 
 </details>
 
+
+---
+
+## Phase 5.10 - Code Review & Future Research Directions 📝
+
+> GPT-5.1 code review of Phase 5.10 implementation, followed by documentation of two alternative research directions.
+
+<details>
+<summary>Click to expand details</summary>
+
+### GPT-5.1 Code Review Results
+
+Submitted Phase 5.10 code changes to GPT-5.1 for review. Key findings:
+
+**Confirmed Correct:**
+- Dummy token approach for getting prefix's last hidden state
+- Attention mask fix (skipping dummy token for new tokens)
+- Cache trimming logic in `eval_extend` mode
+
+**Identified Issues:**
+1. `cache_initialized_` variable in `IncrementalCachedMCTSPolicy` is unused (dead code)
+2. `cache_dims_.prefix_len` semantic confusion after `extend_cache()` - should rename to `cache_len`
+3. Potential off-by-one risks in attention mask indexing (verified correct, but fragile)
+
+**Fundamental Problem Confirmed:**
+GPT-5.1 independently confirmed the architectural mismatch:
+> "KV cache is designed for linear autoregressive sequences. MCTS explores a tree, where each branch would need its own separate cache state."
+
+### Future Research Directions Documented
+
+Added two research directions to `/home/camus/work/trigo.cpp/docs/PLAN.md`:
+
+**1. Batch MCTS with Shared Prefix Cache**
+- Collect N leaves before evaluation (instead of one-by-one)
+- Group leaves by common prefix for cache sharing
+- Batch evaluate with GPU parallelism
+- Expected speedup: 10-20×
+- Priority: Medium
+
+**2. MuZero-Style Architecture**
+- Replace variable-length sequences with fixed-size hidden states
+- Three networks: Representation (h), Dynamics (g), Prediction (f)
+- Dynamics network: ~0.1ms per call (vs 3-5ms for full transformer)
+- Perfect for MCTS: hidden states can be stored per node
+- Expected speedup: 10× for MCTS
+- Priority: Lower (high complexity)
+
+### Files Modified
+
+- `/home/camus/work/trigo.cpp/docs/PLAN.md` - Added two "Future Research" sections
+
+</details>
+
