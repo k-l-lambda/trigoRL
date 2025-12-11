@@ -12704,3 +12704,100 @@ C++ `cached_mcts.hpp` is now **fully consistent** with TypeScript `mctsAgent.ts`
 All tests pass. Phase 5.8 complete.
 
 </details>
+
+
+---
+
+## 2025/12/11
+
+
+## Phase 5.9 - C++ MCTS Expansion Strategy Fix ✅
+
+> LLM-assisted code review identified and fixed expansion strategy mismatch between C++ and TypeScript MCTS implementations.
+
+<details>
+<summary>Click to expand details</summary>
+
+### Overview
+
+Used GPT-5.1 and Gemini-3-Pro (via other-mcp) to compare C++ `cached_mcts.hpp` with TypeScript `mctsAgent.ts`. Both models independently identified the same critical algorithmic difference.
+
+### Problem Identified
+
+**C++ (Traditional MCTS style):**
+- Forced visiting every child with `visit_count == 0` before using PUCT
+- Ignored policy network guidance for first K simulations (K = number of legal moves)
+- Made Dirichlet noise ineffective during forced expansion phase
+
+**TypeScript (AlphaZero style):**
+- Uses PUCT immediately, even when all children have N=0
+- Policy priors guide exploration from the first simulation
+- Dirichlet noise is effective immediately
+
+### The Fix
+
+**Modified `expand()` function:**
+- Removed forced visiting of `visit_count == 0` children
+- Now only creates children and marks node as `is_fully_expanded` immediately
+- Returns parent node (not a selected child)
+
+**Modified main simulation loop:**
+- Changed condition from `node->visit_count > 0` to `!node->is_fully_expanded`
+- After expansion, uses `select_best_puct_child()` to pick child via PUCT
+- When all N=0, PUCT reduces to `score = c * P * sqrt(1) = c * P`, selecting highest prior
+
+### Code Changes
+
+**Before (problematic):**
+```cpp
+// In expand(): Force visit unvisited children
+if (!node->children.empty()) {
+    for (auto& child : node->children) {
+        if (child->visit_count == 0) {
+            return child.get();  // Bypass PUCT!
+        }
+    }
+}
+```
+
+**After (fixed):**
+```cpp
+// In expand(): Just create children, let PUCT decide
+if (!node->children.empty()) {
+    node->is_fully_expanded = true;
+    return node;  // Return to main loop
+}
+// ... create children ...
+node->is_fully_expanded = true;
+return node;
+
+// In main loop: Use PUCT after expansion
+if (!node->children.empty()) {
+    node = select_best_puct_child(node, is_white);
+    // Apply move...
+}
+```
+
+### GPT-5.1 Review Confirmation
+
+GPT-5.1 reviewed the fix and confirmed:
+
+| Aspect | Status |
+|--------|--------|
+| Matches AlphaZero/TS behavior | ✅ Correct |
+| Dirichlet noise timing | ✅ Now applied before first PUCT selection |
+| Backpropagation start node | ✅ Correct (leaf node) |
+| No double move application | ✅ Verified |
+
+### Problems Solved
+
+1. **Expansion strategy aligned**: PUCT now guides selection from the first simulation
+2. **Dirichlet noise effective**: No longer ignored during expansion phase
+3. **More efficient**: Does not waste simulations on obviously bad moves
+
+### Files Modified
+
+- `/home/camus/work/trigo.cpp/include/cached_mcts.hpp` - Fixed `expand()` and main simulation loop
+
+</details>
+
