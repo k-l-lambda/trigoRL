@@ -12934,3 +12934,79 @@ Added two research directions to `/home/camus/work/trigo.cpp/docs/PLAN.md`:
 
 </details>
 
+
+---
+
+## 2025/12/16
+
+
+## Phase 5.11 - Fixed Llama ONNX Model Inference and Documentation Update ✅
+
+> Fixed hardcoded prefix length issue in shared model inferencer causing slow inference, and expanded ONNX export guide with best practices and integration examples.
+
+<details>
+<summary>Fixed inference performance and updated export documentation</summary>
+
+### Problem Analysis
+
+The Llama ONNX model was experiencing slow inference during value function evaluation. Investigation revealed the root cause in `shared_model_inferencer.cpp`:
+
+**Issue**: The `value_inference()` function had hardcoded `prefix_len = 128`, which caused:
+- Crashes or incorrect behavior when sequence length < 128
+- Unnecessary padding overhead for short sequences
+- Performance degradation across most game states
+
+### Solution Implemented
+
+Changed from hardcoded to dynamic prefix length calculation in `value_inference()`:
+
+```cpp
+// Before
+int prefix_len = 128;  // Fixed, causes issues for short sequences
+
+// After
+int prefix_len = std::max(1, total_seq_len / 2);  // Dynamic calculation
+```
+
+This approach:
+- Uses half the current sequence length as the prefix (standard KV cache split)
+- Ensures minimum of 1 to prevent edge cases
+- Scales automatically with sequence length
+- Consistent with the previous fix in `mcts.hpp` that removed MIN_SEQ_LEN = 128 padding
+
+### ONNX Export Guide Expansion
+
+Significantly enhanced `/home/camus/work/trigo.cpp/docs/ONNX_export_guide.md` from 284 to 519 lines:
+
+**New "Best Practices" Section:**
+- Emphasized `--dynamic-seq` flag as critical for production inference
+- Documented three export modes: `tree`, `evaluation`, `shared`
+- Provided detailed use case recommendations for each mode
+
+**Integration Examples Added:**
+- C++ inference integration patterns
+- TypeScript inference integration patterns
+- Batch processing recommendations
+
+**Expanded Troubleshooting:**
+- Documented real-world issues encountered during implementation
+- Added diagnostic steps for common performance problems
+- Included cache-related failure modes and recovery procedures
+
+### Impact
+
+- **Performance**: Inference now scales correctly with sequence length instead of always padding to 128 tokens
+- **Reliability**: Eliminated crashes on short sequences
+- **Documentation**: Comprehensive guide now covers best practices, integration patterns, and troubleshooting
+- **Maintainability**: Future developers have clear guidance on ONNX export and integration
+
+### Files Modified
+
+**C++:**
+- `src/shared_model_inferencer.cpp` - Fixed dynamic prefix_len calculation in `value_inference()`
+
+**Documentation:**
+- `/home/camus/work/trigo.cpp/docs/ONNX_export_guide.md` - Expanded with best practices, examples, and troubleshooting (284 → 519 lines)
+
+</details>
+

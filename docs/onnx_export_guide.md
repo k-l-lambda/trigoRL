@@ -11,10 +11,93 @@ python exportOnnx.py training_output/trigo-gpt2-20250115_120000
 # Export best checkpoint
 python exportOnnx.py training_output/trigo-gpt2-20250115_120000 --checkpoint best
 
-# Export with dynamic batch and sequence sizes
+# Export with dynamic batch and sequence sizes (RECOMMENDED)
 python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \
     --dynamic-batch --dynamic-seq
 ```
+
+## Best Practices
+
+### 1. Always Use Dynamic Sequence Length
+
+**CRITICAL**: Always export with `--dynamic-seq` for production use.
+
+Fixed sequence length models require padding all inputs to the same length, which:
+- Wastes computation on padding tokens
+- Can cause 10-20x performance degradation for short sequences
+- May cause errors if input exceeds the fixed length
+
+```bash
+# ✓ RECOMMENDED: Dynamic sequence length
+python exportOnnx.py training_output/model --dynamic-seq
+
+# ✗ AVOID: Fixed sequence length (unless you have a specific reason)
+python exportOnnx.py training_output/model --seq-len 256
+```
+
+### 2. Choose the Right Export Mode
+
+TrigoRL supports three export modes for different use cases:
+
+| Mode | Files Generated | Use Case |
+|------|-----------------|----------|
+| `tree` | Single ONNX file | TypeScript tree-based move generation |
+| `evaluation` | Single ONNX file | TypeScript position evaluation |
+| `shared` | 3 ONNX files (base + heads) | C++ MCTS with shared backbone |
+
+```bash
+# For TypeScript (trigo-web)
+python exportOnnx.py training_output/model --mode tree --dynamic-seq
+python exportOnnx.py training_output/model --mode evaluation --dynamic-seq
+
+# For C++ (trigo.cpp MCTS)
+python exportOnnx.py training_output/model --mode shared --dynamic-seq
+```
+
+### 3. Export All Three Modes for Full Compatibility
+
+For a complete deployment, export all modes:
+
+```bash
+CHECKPOINT="outputs/trigor/20251215-model/ep0045_val_loss_2.0877.chkpt"
+
+# TypeScript tree agent
+python exportOnnx.py $CHECKPOINT --mode tree --dynamic-seq
+
+# TypeScript evaluation
+python exportOnnx.py $CHECKPOINT --mode evaluation --dynamic-seq
+
+# C++ AlphaZero MCTS
+python exportOnnx.py $CHECKPOINT --mode shared --dynamic-seq
+```
+
+### 4. GPU Acceleration
+
+For GPU inference, ensure CUDA provider is available:
+
+```python
+import onnxruntime as ort
+
+# Check available providers
+print(ort.get_available_providers())
+# Should include 'CUDAExecutionProvider' for GPU
+
+# Create session with GPU
+session = ort.InferenceSession(
+    'model.onnx',
+    providers=['CUDAExecutionProvider', 'CPUExecutionProvider']
+)
+```
+
+### 5. Performance Considerations
+
+- **Short sequences (< 50 tokens)**: ~2-4ms per inference on GPU
+- **Medium sequences (50-200 tokens)**: ~5-20ms per inference on GPU
+- **Long sequences (> 200 tokens)**: Transformer O(n²) complexity applies
+
+For MCTS with 50-100 simulations, expect:
+- Early game (short TGN): ~100-200ms per move
+- Late game (long TGN): ~1-5s per move (depends on sequence length)
 
 ## Command Line Options
 
@@ -217,6 +300,84 @@ pip install -r requirements.txt
 pip install onnx onnxscript onnxruntime
 ```
 
+### Fixed Sequence Length Performance Issues
+
+**Symptom**: Model inference is extremely slow (10-20x expected time)
+
+**Cause**: Using fixed sequence length models that pad all inputs
+
+**Solution**: Re-export with `--dynamic-seq`:
+
+```bash
+python exportOnnx.py training_output/model --dynamic-seq
+```
+
+### C++ MCTS "vector::reserve" Error
+
+**Symptom**: `std::exception: vector::reserve` error during value inference
+
+**Cause**: The shared model inferencer expects sequences within certain bounds
+
+**Solution**:
+1. Ensure using dynamic sequence length models
+2. Check that `shared_model_inferencer.cpp` uses dynamic `prefix_len` calculation
+3. The default split is `prefix_len = max(1, total_seq_len / 2)`
+
+### CUDA Device Not Found (C++)
+
+**Symptom**: "CUDA failure 100: no CUDA-capable device is detected"
+
+**Cause**: Wrong CUDA device ID or device not visible
+
+**Solution**:
+```bash
+# Check available GPUs
+nvidia-smi
+
+# Set correct device
+CUDA_VISIBLE_DEVICES=0 ./self_play_generator --model ...
+
+# Or force CPU mode
+TRIGO_FORCE_CPU=1 ./self_play_generator --model ...
+```
+
+### Slow Inference with Long Sequences
+
+**Symptom**: Late-game MCTS moves taking 5-10+ seconds
+
+**Cause**: Transformer attention is O(n²) with sequence length
+
+**Understanding**: This is expected behavior, not a bug. For a 500-token sequence:
+- Each attention layer computes 500×500 = 250,000 attention scores
+- With 6 layers, that's 1.5M attention computations per forward pass
+
+**Mitigation strategies**:
+1. Use smaller board sizes for faster games
+2. Reduce MCTS simulations for late-game moves
+3. Consider implementing prefix caching (advanced)
+4. Use linear attention architectures (RWKV, xLSTM)
+
+### Model Input/Output Mismatch
+
+**Symptom**: Shape mismatch errors during inference
+
+**Check the model I/O**:
+```python
+import onnx
+model = onnx.load('model.onnx')
+print("Inputs:")
+for inp in model.graph.input:
+    print(f"  {inp.name}: {[d.dim_value for d in inp.type.tensor_type.shape.dim]}")
+print("Outputs:")
+for out in model.graph.output:
+    print(f"  {out.name}: {[d.dim_value for d in out.type.tensor_type.shape.dim]}")
+```
+
+For shared models, verify:
+- `base_model.onnx`: inputs `prefix_ids`, `evaluated_ids`, `evaluated_mask`
+- `policy_head.onnx`: input `hidden_states`, output `logits`
+- `value_head.onnx`: input `hidden_states`, output `values`
+
 ## Advanced Usage
 
 ### Custom Opset Version
@@ -243,9 +404,81 @@ python exportOnnx.py training_output/trigo-gpt2-20250115_120000 \
 
 ## Integration with Trigo Game Engine
 
-The exported ONNX models can be integrated with the Trigo game engine:
+### TypeScript (trigo-web)
 
-### Backend (Python)
+For tree-based move generation and evaluation:
+
+```typescript
+// tools/selfPlayGames.ts usage
+npx ts-node tools/selfPlayGames.ts \
+    --black /path/to/model_tree.onnx \
+    --white /path/to/model_tree.onnx \
+    --evaluator /path/to/model_evaluation.onnx \
+    --gameCount 10 \
+    --board 5x5x1
+```
+
+TypeScript uses:
+- `*_tree.onnx` for `trigoTreeAgent.ts` - tree-based move generation with prefix tree
+- `*_evaluation.onnx` for `trigoEvaluationAgent.ts` - position value estimation
+
+### C++ (trigo.cpp AlphaZero MCTS)
+
+For AlphaZero-style MCTS with neural network guidance:
+
+```bash
+# Build self_play_generator
+cd trigo.cpp/build && cmake -DCMAKE_BUILD_TYPE=Release .. && make
+
+# Run with shared model (3-file format)
+./self_play_generator \
+    --num-games 100 \
+    --board 5x5x1 \
+    --black-policy alphazero \
+    --white-policy alphazero \
+    --model /path/to/model_shared \
+    --mcts-simulations 50 \
+    --output ./selfplay_data
+```
+
+The `--model` path should point to the directory containing:
+- `base_model.onnx` - Shared transformer backbone
+- `policy_head.onnx` - Move prediction head
+- `value_head.onnx` - Position evaluation head
+
+### Shared Model Architecture
+
+The shared model architecture enables efficient inference:
+
+```
+Input Tokens
+     │
+     ▼
+┌─────────────────┐
+│  Base Model     │  (Transformer backbone)
+│  base_model.onnx│
+└─────────────────┘
+     │
+     │ Hidden States
+     ▼
+  ┌──┴──┐
+  │     │
+  ▼     ▼
+┌─────┐ ┌─────┐
+│Policy│ │Value│
+│ Head │ │ Head│
+└─────┘ └─────┘
+  │       │
+  ▼       ▼
+Logits   Value
+```
+
+**Advantages**:
+- Single forward pass through backbone for both policy and value
+- Reduced memory usage compared to separate models
+- Efficient batched inference in MCTS
+
+### Python Backend
 
 ```python
 # Load ONNX model for AI player
@@ -278,6 +511,9 @@ async function aiMove(boardState) {
 
 ## See Also
 
+- `trigor/exportOnnx.py` - Export script with all options
 - `tests/test_onnx_export.py` - Test suite for export functionality
-- `examples/example_onnx_export.py` - Complete usage examples
+- `third_party/trigo/trigo-web/tools/selfPlayGames.ts` - TypeScript self-play with ONNX
+- `third_party/trigo.cpp/src/self_play_generator.cpp` - C++ AlphaZero MCTS
+- `third_party/trigo.cpp/src/shared_model_inferencer.cpp` - C++ shared model inference
 - ONNX Runtime documentation: https://onnxruntime.ai/
