@@ -13010,3 +13010,70 @@ Significantly enhanced `/home/camus/work/trigo.cpp/docs/ONNX_export_guide.md` fr
 
 </details>
 
+
+---
+
+## Phase 5.12 - ONNX Model Performance Benchmarking and Analysis ✅
+
+> Completed comprehensive performance benchmarking of GPT-2 and Llama ONNX models with dynamic sequence length support, confirming similar inference characteristics and creating detailed performance analysis report.
+
+<details>
+<summary>Performance benchmarking across sequence lengths and model architectures</summary>
+
+### Benchmark Scope
+
+Created and executed comprehensive performance testing for ONNX models with sequence lengths: 20, 50, 100, 150, 200, 300, 400, 500 tokens. Tests covered both GPT-2 (MHA) and Llama (GQA) architectures with identical configurations (6 layers, 64 hidden dimension, 128 vocab size).
+
+### Performance Results
+
+**Key Findings:**
+
+| Sequence Length | GPT-2 (ms) | Llama (ms) | Ratio |
+|-----------------|-----------|-----------|-------|
+| 20 | 1.52 | 1.49 | 0.98× |
+| 100 | 3.03 | 3.07 | 1.01× |
+| 500 | 12.85 | 13.55 | 1.05× |
+
+**Model Comparison**: Llama is approximately 1.0-1.1x the speed of GPT-2 across all sequence lengths, indicating nearly equivalent performance for TGN tokenization tasks.
+
+### Component Analysis
+
+At seq_len=500, component breakdown:
+- Transformer backbone: ~99% of inference time
+- Policy head: ~0.5% overhead
+- Value head: ~0.5% overhead
+
+**Scaling Behavior**: Inference time scales sub-quadratically with sequence length, indicating efficient implementation with linear operations dominating at current sequence lengths.
+
+### MCTS Move Time Estimation
+
+Based on 50 simulations per move:
+- Opening (seq_len=20): ~0.07-0.08s per move
+- Early game (seq_len=100): ~0.15s per move
+- Late game (seq_len=500): ~0.64-0.68s per move
+- Full 5×5×1 game: ~10-30 seconds total
+
+### Vocabulary Size Clarification
+
+Confirmed that `vocab_size=128` is correct for the TGN tokenizer design:
+- Uses ASCII direct mapping (no subword tokenization)
+- All TGN tokens map directly to ASCII characters
+- Fixed vocabulary appropriate for domain-specific game notation
+
+### Performance Recommendations
+
+1. **Model Selection**: Either GPT-2 or Llama can be used interchangeably based on deployment constraints
+2. **Sequence Length Impact**: Plan for 0.6-0.7s per move in late-game scenarios
+3. **Optimization Priority**: Transformer backbone is the bottleneck; KV cache optimization remains valuable for deployments with extended sequences
+
+### Files Created and Modified
+
+**New Documentation:**
+- `/home/camus/work/trigoRL/docs/PERFORMANCE_ANALYSIS_1216.md` - Comprehensive benchmark results, component breakdown, scaling analysis, and recommendations (120+ lines)
+
+**Test Artifacts:**
+- Benchmark test data with statistical analysis (mean and standard deviation for all sequence lengths)
+- Component-level profiling data showing transformer vs. head overhead breakdown
+
+</details>
+
