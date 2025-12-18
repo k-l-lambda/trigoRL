@@ -13077,3 +13077,165 @@ Confirmed that `vocab_size=128` is correct for the TGN tokenizer design:
 
 </details>
 
+
+## 2025/12/18
+
+
+> Root cause of AlphaZero MCTS value inference error was stale libtrigo_inference.so shared library; rebuild fixed both CPU and GPU modes.
+
+<details>
+<summary>Stale shared library caused silent inference failure</summary>
+
+### Problem Identified
+
+The AlphaZero MCTS implementation was failing with a vector::reserve error during value inference:
+
+```
+[AlphaZero MCTS] Value inference error (seq_len=23): vector::reserve error
+input_shape:{1,0,0}
+```
+
+This occurred in GPU mode, while CPU mode would occasionally work with corrupted behavior.
+
+### Root Cause: Stale Shared Library
+
+The issue was traced to `libtrigo_inference.so` being stale and out of sync with the executable. Evidence:
+
+1. **Silent Debug Output Failure**: Debug output `[DEBUG MCTS evaluate] step 5: calling value_inference` was printing correctly, but `[DEBUG value_inference ENTRY]` never appeared in the library function - even though the debug string was verified to exist in the binary using `strings libtrigo_inference.so`.
+
+2. **ABI Mismatch**: This indicates the stale library was being loaded by the dynamic linker instead of the recently compiled version. The executable and shared library were out of sync, causing undefined behavior.
+
+3. **Zero-Sized Tensor Corruption**: The ONNX Runtime received `input_shape:{1,0,0}` instead of the correct shape `{1,23,embedding_dim}`. This suggests the stale library was passing corrupted parameter data to the inference function.
+
+### Resolution
+
+A clean rebuild resolved the issue entirely:
+
+**Files modified:**
+- `CMakeLists.txt` - Added guard to allow external `ONNXRUNTIME_ROOT_DIR` configuration
+- `shared_model_inferencer.cpp` - Added comprehensive debug output at function entry/exit
+- `mcts.hpp` - Added step-by-step debug tracking for move evaluation
+
+**Results after rebuild:**
+- CPU mode: All debug outputs print correctly, inference succeeds
+- GPU mode: All debug outputs print correctly, inference succeeds
+- No more zero-sized tensor errors
+
+### Lesson Learned
+
+When debugging shared library issues where:
+- Debug output in wrapper code executes correctly
+- Debug output in shared library doesn't appear despite being present in the binary
+- Parameter values become corrupted
+
+This is a classic sign of **ABI mismatch or stale shared library**. The executable and `.so` were compiled at different times with potentially incompatible object layouts. A clean rebuild ensures both are in sync, resolving the undefined behavior.
+
+### Key Takeaway
+
+Always rebuild shared libraries when:
+1. Modifying header files included by the library
+2. Changing compiler flags or optimization levels
+3. Debugging mysterious parameter corruption
+4. Debug output appears in wrapper but not in library
+
+This is a common C++ pitfall when mixing static compilation of executables with dynamic linking of libraries.
+
+</details>
+
+
+> Updated trigo.cpp/README.md with comprehensive ONNX Runtime installation and troubleshooting guide covering GPU architecture compatibility.
+
+<details>
+<summary>ONNX Runtime installation documentation completed</summary>
+
+### Documentation Additions
+
+Updated `/home/camus/work/trigoRL/third_party/trigo/trigo.cpp/README.md` with comprehensive guidance for ONNX Runtime setup.
+
+### GPU Architecture Compatibility Guide
+
+Added detailed compatibility matrix:
+
+**H100/H200 (Hopper)**
+- Requires ONNX Runtime 1.20.0 or later
+- CUDA 12.x required
+- Modern GPU compute capability support
+
+**RTX 30xx/40xx, A100 (Ampere/Ada)**
+- ONNX Runtime 1.17.0 or 1.20.0
+- CUDA 11.8-12.x compatible
+- Widest hardware support range
+
+**V100 (Volta)**
+- ONNX Runtime 1.17.0 or later
+- CUDA 11.x minimum
+- Legacy hardware support
+
+**CPU-only**
+- ONNX Runtime 1.17.0 or later
+- No GPU requirements
+
+### Installation Methods
+
+**Method 1: Download pre-built binaries** (Recommended)
+- Option A: Project directory installation (no sudo required)
+  - Download to `third_party/trigo/trigo.cpp/onnxruntime`
+  - Set `ONNXRUNTIME_ROOT_DIR` environment variable
+  - Clean build triggers automatic library detection
+- Option B: System-wide installation
+  - Install to `/opt/onnxruntime`
+  - Linker automatically finds library
+  - Requires sudo for system directories
+
+**Method 2: Package manager** (Ubuntu/Debian)
+- `apt install libonnxruntime-dev`
+- Quick setup for standard configurations
+- May lag behind latest ONNX Runtime releases
+
+**Method 3: Build from source** (Advanced)
+- Clone ONNX Runtime repository
+- Configure for your GPU architecture
+- Compile with appropriate CUDA/cuDNN versions
+- Useful for custom optimizations
+
+### Troubleshooting Section
+
+Common issues and solutions:
+
+**ONNX Runtime not found**
+- Verify installation path
+- Set `ONNXRUNTIME_ROOT_DIR` environment variable
+- Check CMake output for detection status
+
+**CUDA not found**
+- Verify CUDA installation: `nvcc --version`
+- Set `CUDA_HOME` environment variable
+- Ensure CUDA version matches ONNX Runtime requirements
+
+**Runtime linker errors**
+- Check `LD_LIBRARY_PATH` for library location
+- Use `ldd` to verify library dependencies
+- Rebuild with debug symbols if needed
+
+**CMake version too old**
+- Requires CMake 3.15 or later
+- Install newer version if needed
+- Clear CMake cache and rebuild
+
+### Key Files Updated
+
+- `third_party/trigo/trigo.cpp/README.md` - Main installation guide
+- `CMakeLists.txt` - ONNXRUNTIME_ROOT_DIR guard added
+
+### Benefit
+
+Users can now:
+1. Select appropriate ONNX Runtime version for their GPU
+2. Follow clear step-by-step installation methods
+3. Troubleshoot common build failures independently
+4. Understand architecture-specific requirements
+
+This documentation ensures successful first-time setup for developers across different hardware configurations.
+
+</details>
+
