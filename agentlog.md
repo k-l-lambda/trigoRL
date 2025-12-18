@@ -13239,3 +13239,90 @@ This documentation ensures successful first-time setup for developers across dif
 
 </details>
 
+
+> Fixed Pass-first move bug in MCTS error fallback - changed exception handler to preserve minimal Pass prior instead of uniform probability.
+
+<details>
+<summary>Pass-first move bug fix - minimal prior preservation</summary>
+
+### Problem Discovered
+
+User reported game "[Game 153] 9x4x1: Pass bz ca..." where the first move was Pass, which is incorrect behavior. Investigation revealed a critical bug in the MCTS error handling that could select Pass as the opening move when policy inference failed.
+
+### Root Cause Analysis
+
+In the exception handler for `get_move_priors()` function:
+
+**Location**: `mcts.hpp:878` and `cached_mcts.hpp:883`
+
+**Buggy Code**:
+```cpp
+return std::vector<float>(num_moves, 1.0f / num_moves);
+```
+
+This fallback gave all moves uniform probability of `1.0 / num_moves`, resulting in Pass receiving approximately 4-5% probability instead of the intended 1e-10 (~0.00000001%).
+
+**Why This Was Critical**: When policy inference failed (e.g., ONNX Runtime initialization errors, tensor dimension mismatches), the error handler would kick in and randomly select moves with equal probability. Pass, as the last move index, could be selected as the first move.
+
+### Fix Applied
+
+Modified the exception handler in both files to preserve the intended Pass prior value during fallback:
+
+**File 1**: `/home/camus/work/trigoRL/third_party/trigo/trigo.cpp/include/mcts.hpp` (lines 873-893)
+- Created fallback vector with `pass_prior_value` (1e-10) for Pass move
+- Set all regular moves to equal probability: `(1.0f - pass_prior_value) / (num_moves - 1)`
+- Ensured probabilities sum to exactly 1.0
+
+**File 2**: `/home/camus/work/trigoRL/third_party/trigo/trigo.cpp/include/cached_mcts.hpp` (lines 878-898)
+- Applied identical fix to maintain consistency across MCTS implementations
+
+**New Fallback Code** (conceptual):
+```cpp
+std::vector<float> fallback(num_moves);
+const float regular_prob = (1.0f - pass_prior_value) / (num_moves - 1);
+for (size_t i = 0; i < num_moves - 1; ++i) {
+    fallback[i] = regular_prob;  // Regular moves get equal probability
+}
+fallback[num_moves - 1] = pass_prior_value;  // Pass gets minimal prior
+return fallback;
+```
+
+### Testing and Verification
+
+**Debug Output Verification**:
+- Pass prior now shows as `0.0000000001` in debug output
+- Confirmed move probabilities sum to 1.0 in fallback cases
+
+**Game Testing**:
+- Verified no games start with Pass move in test runs
+- Pass moves only appear late in games when appropriate (when winning position reached or all other moves have zero liberties)
+- Tested both CPU and GPU inference modes
+
+**Impact**: Critical fix preventing incorrect Pass selection in early game states.
+
+### Files Modified
+
+**trigo.cpp**:
+- `include/mcts.hpp` - Exception handler in `get_move_priors()` (lines 873-893)
+- `include/cached_mcts.hpp` - Exception handler in `get_move_priors()` (lines 878-898)
+
+### Technical Notes
+
+**Pass Prior Value**: Set to `1e-10` in both implementations
+- Small enough to be negligible in policy selection (almost zero)
+- Large enough to prevent log(0) errors in probability calculations
+- Consistent with AlphaZero conventions for discouraged but technically valid moves
+
+**Fallback Trigger Conditions**:
+- ONNX Runtime tensor operations throw exception
+- Model inference returns invalid dimensions
+- Input shape validation fails
+- Memory allocation errors during inference
+
+**Prevention Going Forward**:
+- Error handlers should never use uniform probability for moves with different strategic values
+- Always preserve tuned prior values, especially for special moves like Pass
+- Consider adding detailed logging of fallback triggers for easier diagnostics
+
+</details>
+
