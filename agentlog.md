@@ -13078,6 +13078,132 @@ Confirmed that `vocab_size=128` is correct for the TGN tokenizer design:
 </details>
 
 
+
+---
+
+## 2025/12/17
+
+## Model Battle Analysis and MCTS Verification ✅
+
+> Conducted comprehensive model battles between LLaMA (iteration 1 data, λ=0.02) and GPT-2 (random data, lr500) models, analyzed why iteration 1 trained model underperforms, and verified MCTS implementation correctness.
+
+<details>
+<summary>Model battle results and MCTS analysis findings</summary>
+
+### Model Battle Results
+
+Conducted multiple battles between different model configurations:
+
+| Battle | Mode | Winner | Score |
+|--------|------|--------|-------|
+| LLaMA (λ=0.02, iter1) vs GPT-2 (lr500, random) | No MCTS | GPT-2 | 72% vs 28% |
+| LLaMA (λ=0.02, iter1) vs GPT-2 (lr500, random) | MCTS-40 | LLaMA | 58% vs 42% |
+| LLaMA ep0141 (λ=0.02) vs LLaMA ep0045 | MCTS-40 | ep0141 | 59% vs 41% |
+
+**Key Observation**: MCTS search reverses the win rate - GPT-2 dominates without MCTS (72%), but LLaMA wins with MCTS (58%).
+
+### Investigation: Why Iteration 1 Model Loses Without MCTS
+
+Analyzed why the model trained on "higher quality" iteration 1 self-play data paradoxically loses to the model trained on random game data.
+
+**Dataset Comparison:**
+
+| Metric | Random Data (251129-sp) | Iteration 1 (sim40-20251211) |
+|--------|------------------------|------------------------------|
+| Files | 9,821 | 9,984 |
+| Mean Score | -2.93 | +0.20 |
+| Score StdDev | 33.27 | 22.05 |
+| Draw Rate | 3.7% | 8.0% |
+| 1D Boards | 408 | 531 |
+
+**Root Causes Identified:**
+
+1. **Lower Score Variance**: Iteration 1 has σ=22 vs random σ=33, providing weaker value training signal
+2. **Higher Draw Rate**: 8% vs 3.7% reduces discriminative value targets
+3. **Data Pollution**: 531 low-quality 1D board games in iteration 1
+4. **Insufficient Value Weight**: lambda_value=0.02 too low compared to 0.06 in baseline
+
+**Training Config Comparison:**
+
+| Parameter | GPT-2 ep0019 (winner) | LLaMA ep0141 (loser) |
+|-----------|----------------------|---------------------|
+| lambda_value | 0.06 | 0.02 |
+| Data Source | random games | iteration 1 self-play |
+| Architecture | GPT-2 | LLaMA |
+
+### MCTS Compensates for Policy Weakness
+
+The dramatic win rate reversal (GPT-2 72% → 42%) demonstrates that MCTS search effectively compensates for policy model weakness:
+
+- **Without MCTS**: Raw policy quality dominates; GPT-2's better policy wins
+- **With MCTS**: Value network + tree search compensates for weaker policy; LLaMA's value head helps
+
+This suggests the LLaMA model has reasonable value estimation but weak policy, while GPT-2 has stronger policy but potentially weaker value estimation.
+
+### MCTS Implementation Verification
+
+Generated and analyzed a 5×1×1 MCTS game with visit count logging to verify implementation correctness.
+
+**Test Game:**
+```
+Board: a b 0 y z (5×1 linear board)
+
+Move 1 (Black): 0 [84 visits] - Center position ✓
+Move 2 (White): a [53 visits] - Corner position ✓
+Move 3 (Black): b [16 visits] vs z [72 visits] - INTERESTING
+Move 4 (White): z [94 visits] - Forced response ✓
+Move 5 (Black): Pass [77 visits] - Game decided ✓
+Move 6 (White): Pass [99 visits] - Game ends ✓
+
+Result: Black wins by 2 (-2)
+```
+
+**Move 3 Analysis - Temperature Sampling:**
+
+The move selection of `b` (16 visits) instead of `z` (72 visits) initially appeared anomalous, but is explained by temperature-based sampling:
+
+```typescript
+// From mctsAgent.ts:117-118
+const temperature = moveNumber < 30 ? this.config.temperature : 0.01;
+```
+
+With τ=1.0, probabilities are:
+- `b`: 16/(16+11+72) ≈ 16.2%
+- `z`: 72/(16+11+72) ≈ 72.7%
+
+Selection of `b` is intentional exploration behavior for training data diversity.
+
+**Tactical Correctness:**
+Move `b` is actually tactically strong - it captures White's stone at `a` (which only has one liberty at `b`), resulting in Black controlling 3 points vs playing `z` which would only claim territory.
+
+**Pass Decision Analysis:**
+Both passes (moves 5-6) are reasonable - Black controls a,b,0 (3 points), White controls z (1 point), and further play doesn't change the outcome.
+
+### Conclusions
+
+1. **MCTS Working Correctly**: Temperature sampling for exploration is intentional; visit counts represent exploration effort, not necessarily move quality
+2. **Iteration 1 Data Issues**: Lower variance, higher draws, and data pollution weaken the trained model
+3. **Lambda Value Critical**: 0.02 is too low for effective value head training
+4. **Search vs Policy Trade-off**: MCTS search can compensate for weak policy but requires good value estimation
+
+### Recommendations for Next Iteration
+
+1. **Increase lambda_value** to 0.06 or higher for better value training
+2. **Filter training data** to remove 1D boards and ultra-short games
+3. **Ensure score diversity** by mixing in some random games
+4. **Monitor value loss** during training to ensure value head is learning
+
+### Files Analyzed
+
+- `/tmp/battle_llama_vs_gpt2_with_mcts.log` - 100 games with MCTS
+- `/tmp/battle_llama_vs_gpt2_no_mcts.log` - 100 games without MCTS
+- `/tmp/battle_llama_mcts_100_tgn.log` - LLaMA vs LLaMA comparison
+- `/tmp/mcts_analysis/game_1_visit_counts.json` - MCTS visit count data
+- `/home/claude/work/trigo/trigo-web/inc/mctsAgent.ts` - TypeScript MCTS implementation
+
+</details>
+
+
 ## 2025/12/18
 
 
@@ -13664,125 +13790,3 @@ For self-play training with AlphaZero:
 </details>
 
 
-
----
-
-## 2025/12/17 - Model Battle Analysis and MCTS Verification ✅
-
-> Conducted comprehensive model battles between LLaMA (iteration 1 data, λ=0.02) and GPT-2 (random data, lr500) models, analyzed why iteration 1 trained model underperforms, and verified MCTS implementation correctness.
-
-<details>
-<summary>Model battle results and MCTS analysis findings</summary>
-
-### Model Battle Results
-
-Conducted multiple battles between different model configurations:
-
-| Battle | Mode | Winner | Score |
-|--------|------|--------|-------|
-| LLaMA (λ=0.02, iter1) vs GPT-2 (lr500, random) | No MCTS | GPT-2 | 72% vs 28% |
-| LLaMA (λ=0.02, iter1) vs GPT-2 (lr500, random) | MCTS-40 | LLaMA | 58% vs 42% |
-| LLaMA ep0141 (λ=0.02) vs LLaMA ep0045 | MCTS-40 | ep0141 | 59% vs 41% |
-
-**Key Observation**: MCTS search reverses the win rate - GPT-2 dominates without MCTS (72%), but LLaMA wins with MCTS (58%).
-
-### Investigation: Why Iteration 1 Model Loses Without MCTS
-
-Analyzed why the model trained on "higher quality" iteration 1 self-play data paradoxically loses to the model trained on random game data.
-
-**Dataset Comparison:**
-
-| Metric | Random Data (251129-sp) | Iteration 1 (sim40-20251211) |
-|--------|------------------------|------------------------------|
-| Files | 9,821 | 9,984 |
-| Mean Score | -2.93 | +0.20 |
-| Score StdDev | 33.27 | 22.05 |
-| Draw Rate | 3.7% | 8.0% |
-| 1D Boards | 408 | 531 |
-
-**Root Causes Identified:**
-
-1. **Lower Score Variance**: Iteration 1 has σ=22 vs random σ=33, providing weaker value training signal
-2. **Higher Draw Rate**: 8% vs 3.7% reduces discriminative value targets
-3. **Data Pollution**: 531 low-quality 1D board games in iteration 1
-4. **Insufficient Value Weight**: lambda_value=0.02 too low compared to 0.06 in baseline
-
-**Training Config Comparison:**
-
-| Parameter | GPT-2 ep0019 (winner) | LLaMA ep0141 (loser) |
-|-----------|----------------------|---------------------|
-| lambda_value | 0.06 | 0.02 |
-| Data Source | random games | iteration 1 self-play |
-| Architecture | GPT-2 | LLaMA |
-
-### MCTS Compensates for Policy Weakness
-
-The dramatic win rate reversal (GPT-2 72% → 42%) demonstrates that MCTS search effectively compensates for policy model weakness:
-
-- **Without MCTS**: Raw policy quality dominates; GPT-2's better policy wins
-- **With MCTS**: Value network + tree search compensates for weaker policy; LLaMA's value head helps
-
-This suggests the LLaMA model has reasonable value estimation but weak policy, while GPT-2 has stronger policy but potentially weaker value estimation.
-
-### MCTS Implementation Verification
-
-Generated and analyzed a 5×1×1 MCTS game with visit count logging to verify implementation correctness.
-
-**Test Game:**
-```
-Board: a b 0 y z (5×1 linear board)
-
-Move 1 (Black): 0 [84 visits] - Center position ✓
-Move 2 (White): a [53 visits] - Corner position ✓
-Move 3 (Black): b [16 visits] vs z [72 visits] - INTERESTING
-Move 4 (White): z [94 visits] - Forced response ✓
-Move 5 (Black): Pass [77 visits] - Game decided ✓
-Move 6 (White): Pass [99 visits] - Game ends ✓
-
-Result: Black wins by 2 (-2)
-```
-
-**Move 3 Analysis - Temperature Sampling:**
-
-The move selection of `b` (16 visits) instead of `z` (72 visits) initially appeared anomalous, but is explained by temperature-based sampling:
-
-```typescript
-// From mctsAgent.ts:117-118
-const temperature = moveNumber < 30 ? this.config.temperature : 0.01;
-```
-
-With τ=1.0, probabilities are:
-- `b`: 16/(16+11+72) ≈ 16.2%
-- `z`: 72/(16+11+72) ≈ 72.7%
-
-Selection of `b` is intentional exploration behavior for training data diversity.
-
-**Tactical Correctness:**
-Move `b` is actually tactically strong - it captures White's stone at `a` (which only has one liberty at `b`), resulting in Black controlling 3 points vs playing `z` which would only claim territory.
-
-**Pass Decision Analysis:**
-Both passes (moves 5-6) are reasonable - Black controls a,b,0 (3 points), White controls z (1 point), and further play doesn't change the outcome.
-
-### Conclusions
-
-1. **MCTS Working Correctly**: Temperature sampling for exploration is intentional; visit counts represent exploration effort, not necessarily move quality
-2. **Iteration 1 Data Issues**: Lower variance, higher draws, and data pollution weaken the trained model
-3. **Lambda Value Critical**: 0.02 is too low for effective value head training
-4. **Search vs Policy Trade-off**: MCTS search can compensate for weak policy but requires good value estimation
-
-### Recommendations for Next Iteration
-
-1. **Increase lambda_value** to 0.06 or higher for better value training
-2. **Filter training data** to remove 1D boards and ultra-short games
-3. **Ensure score diversity** by mixing in some random games
-4. **Monitor value loss** during training to ensure value head is learning
-
-### Files Analyzed
-
-- `/tmp/battle_llama_vs_gpt2_with_mcts.log` - 100 games with MCTS
-- `/tmp/battle_llama_vs_gpt2_no_mcts.log` - 100 games without MCTS
-- `/tmp/battle_llama_mcts_100_tgn.log` - LLaMA vs LLaMA comparison
-- `/tmp/mcts_analysis/game_1_visit_counts.json` - MCTS visit count data
-- `/home/claude/work/trigo/trigo-web/inc/mctsAgent.ts` - TypeScript MCTS implementation
-
-</details>
