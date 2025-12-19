@@ -43,6 +43,56 @@ python tools/view_dataset.py configs/training/trigo-gpt2.yaml --sample 0 --token
 
 See [tools/README.md](tools/README.md) for comprehensive CLI documentation.
 
+### Training Models
+
+Train language models from scratch or resume from checkpoints:
+
+```bash
+# Start new training from scratch
+python train_lm.py configs/training/trigo-gpt2.yaml
+
+# Start with config overrides
+python train_lm.py configs/training/trigo-gpt2.yaml training.epochs=50 training.learning_rate=5e-5
+
+# Resume from checkpoint by specifying resume_from in config
+python train_lm.py configs/training/trigo-gpt2.yaml training.resume_from=outputs/trigor/20251113-trigo-gpt2/checkpoints/best.chkpt
+
+# Resume from experiment directory (automatically loads latest checkpoint)
+python train_lm.py outputs/trigor/20251113-trigo-gpt2
+
+# Resume with config overrides (useful for fine-tuning)
+python train_lm.py outputs/trigor/20251113-trigo-gpt2 training.learning_rate=1e-5 training.epochs=100
+```
+
+**Available training configs**:
+- `trigo-gpt2.yaml` - GPT-2 with standard multi-head attention
+- `trigo-llama.yaml` - LLaMA with grouped query attention (GQA)
+- `trigo-rwkv.yaml` - RWKV with linear attention
+- `trigo-gpt2-invsqrt.yaml` - GPT-2 with inverse square root scheduler
+
+**Resume training options**:
+1. **From experiment directory**: `python train_lm.py outputs/trigor/[experiment-dir]`
+   - Automatically loads `checkpoints/latest.chkpt`
+   - Preserves all previous config settings
+   - Continues wandb logging to the same run (if wandb enabled)
+
+2. **From specific checkpoint**: Set `training.resume_from` in config or override:
+   ```yaml
+   training:
+     resume_from: path/to/checkpoint.chkpt  # null = train from scratch
+   ```
+   - Can use `best.chkpt`, `latest.chkpt`, or any epoch checkpoint
+   - Restores model weights, optimizer state, and training progress
+   - Useful for transfer learning or fine-tuning
+
+**Training outputs**:
+- `outputs/trigor/[experiment-id]/config.yaml` - Saved configuration
+- `outputs/trigor/[experiment-id]/train.log` - Training logs
+- `outputs/trigor/[experiment-id]/checkpoints/` - Model checkpoints
+  - `best.chkpt` - Best model (based on validation metric)
+  - `latest.chkpt` - Latest model (for resuming)
+  - `epoch_N.chkpt` - Periodic checkpoints
+
 ### Test Models
 
 Run the model test suite:

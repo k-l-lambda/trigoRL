@@ -61,6 +61,11 @@ training:
   dtype: float32  # Model dtype: float32, float16, bfloat16
   epoch_size: null  # Number of examples per epoch (null = full dataset, can repeat/subsample)
 
+  # Resume from checkpoint
+  # Set to checkpoint path to initialize from a previous checkpoint
+  # Example: resume_from: outputs/trigor/20251113-trigo-rwkv/checkpoints/best.chkpt
+  resume_from: null  # null = train from scratch
+
   # Learning rate scheduler
   scheduler:
     type: cosine  # cosine, linear, constant, inverse_sqrt, lambda
