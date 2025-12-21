@@ -13791,7 +13791,11 @@ For self-play training with AlphaZero:
 
 
 
-## 2025-12-21: 5×5×1 Model Battle Comprehensive Evaluation (MCTS vs Direct Policy)
+## 2025-12-21
+
+## 5×5×1 Model Battle Comprehensive Evaluation (MCTS vs Direct Policy)
+
+<details>
 
 **Date**: 2025-12-21
 **Task**: Evaluate three model matchups on 5×5×1 board with and without MCTS
@@ -13953,4 +13957,4 @@ Battle scripts and game engine remain unchanged from previous terminal checking 
 **Battle Results**:
 - Without MCTS: `tools/output/battle_20251221_final_*/`
 - With MCTS: `tools/output/battle_20251221_mcts40_*_5x5x1/`
-
+</details>
