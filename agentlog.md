@@ -13790,3 +13790,167 @@ For self-play training with AlphaZero:
 </details>
 
 
+
+## 2025-12-21: 5×5×1 Model Battle Comprehensive Evaluation (MCTS vs Direct Policy)
+
+**Date**: 2025-12-21
+**Task**: Evaluate three model matchups on 5×5×1 board with and without MCTS
+**Configuration**: 100 games per matchup, alternating colors (50 as each), Komi 0.5, Max moves 50
+
+### Battle Results Summary
+
+| Matchup | Without MCTS | With MCTS (40 sims) | MCTS Impact |
+|---------|--------------|---------------------|-------------|
+| **value0.02 vs value0.06** | M2: 55% vs 45% | M1: 53% vs 47% | **Flipped** (value0.02 stronger with MCTS) |
+| **value0.02 vs LLaMA15** | M1: 73% vs 27% | M2: 56% vs 44% | **Reversed** (LLaMA15 much stronger with MCTS) |
+| **value0.02 vs GPT2** | M1: 55% vs 45% | M1: 57% vs 43% | **Consistent** (value0.02 slightly stronger) |
+
+### Detailed Results
+
+#### 1. value0.02 (ep0036) vs value0.06 (ep0030)
+
+**Without MCTS** (Direct Policy):
+- Result: value0.06 wins 55% vs 45%
+- Average game length: 34.8 moves
+- Output: `tools/output/battle_20251221_final_value02_vs_value06/`
+
+**With MCTS (40 simulations)**:
+- Result: value0.02 wins 53% vs 47%
+- Average game length: 33.8 moves
+- Total time: 127.6 minutes (76.5s per game)
+- Output: `tools/output/battle_20251221_mcts40_value02_vs_value06_5x5x1/battle_2025-12-21T06-26-41-082Z.json`
+- Breakdown:
+  - value0.02 as Black: 31 wins, as White: 22 wins
+  - value0.06 as Black: 28 wins, as White: 19 wins
+
+#### 2. value0.02 (ep0036) vs LLaMA15 (ep0045, 20251215)
+
+**Without MCTS** (Direct Policy):
+- Result: value0.02 wins 73% vs 27%
+- Average game length: 33.2 moves
+- Output: `tools/output/battle_20251221_final_value02_vs_llama15/`
+
+**With MCTS (40 simulations)**:
+- Result: LLaMA15 wins 56% vs 44%
+- Average game length: 30.9 moves
+- Total time: 129.6 minutes (77.8s per game)
+- Output: `tools/output/battle_20251221_mcts40_value02_vs_llama15_5x5x1/battle_2025-12-21T06-50-11-962Z.json`
+- Breakdown:
+  - value0.02 as Black: 27 wins, as White: 17 wins
+  - LLaMA15 as Black: 33 wins, as White: 23 wins
+
+#### 3. value0.02 (ep0036) vs GPT2 (ep0019, 20251204)
+
+**Without MCTS** (Direct Policy):
+- Result: value0.02 wins 55% vs 45%
+- Average game length: 36.0 moves
+- Output: `tools/output/battle_20251221_final_value02_vs_gpt2/`
+
+**With MCTS (40 simulations)**:
+- Result: value0.02 wins 57% vs 43%
+- Average game length: 32.1 moves
+- Total time: 131.2 minutes (78.7s per game)
+- Output: `tools/output/battle_20251221_mcts40_value02_vs_gpt2_5x5x1/battle_2025-12-21T06-48-46-239Z.json`
+- Breakdown:
+  - value0.02 as Black: 34 wins, as White: 23 wins
+  - GPT2 as Black: 27 wins, as White: 16 wins
+
+### Key Insights
+
+#### 1. MCTS Impact on Model Strength
+
+**MCTS Amplification**: Search dramatically affects relative model strength, sometimes completely reversing outcomes:
+- **value0.02 vs value0.06**: Without search, value0.06's direct policy is stronger (55%). With MCTS, value0.02's better value estimation leads to stronger play (53%).
+- **value0.02 vs LLaMA15**: Most dramatic reversal - value0.02 dominates without MCTS (73%), but LLaMA15 becomes stronger with MCTS (56%). This suggests LLaMA15 has better value estimation even if its direct policy is weaker.
+- **value0.02 vs GPT2**: Consistent results suggest similar policy and value quality between these models.
+
+#### 2. Policy vs Value Network Quality
+
+**Interpretation**:
+- **Direct Policy Play** (no MCTS): Tests the quality of the policy network's immediate move selection
+- **MCTS Play**: Tests both policy (for prior probabilities) and value network (for position evaluation)
+
+**Model Characteristics**:
+- **value0.02**: Strong direct policy, moderate value network
+- **value0.06**: Moderate direct policy, weaker value network (over-fitting to value loss?)
+- **LLaMA15**: Weak direct policy, excellent value network (search compensates for policy weakness)
+- **GPT2**: Balanced policy and value networks
+
+#### 3. Training Loss Factor Analysis
+
+The value loss factor (0.02 vs 0.06) significantly impacts model behavior:
+- **Lower factor (0.02)**: Better balance between policy and value learning
+- **Higher factor (0.06)**: May over-emphasize value learning at expense of policy quality
+- **LLaMA architecture**: Stronger value learning even with standard loss factors
+
+#### 4. Architecture Impact
+
+**LLaMA vs GPT2**:
+- LLaMA architecture shows better value estimation capabilities
+- GPT2 may have better policy learning or be more balanced
+- MCTS performance suggests LLaMA is better suited for RL with search
+
+### Technical Configuration
+
+**MCTS Parameters** (from previous session fixes):
+- Simulations: 40 per move
+- Dirichlet epsilon: 0.0 (deterministic evaluation)
+- Temperature: 1.0
+- c_puct: 1.0
+- Pass penalty Q-value: -1000 (prevent premature passing)
+- Max moves: 50 (2× board size)
+
+**Terminal Checking** (bug fix applied):
+- Games end only when: `territory.neutral === 0` AND no capturing moves available for both players
+- Previous bug: ended when all territory claimed, even if captures could reverse outcome
+- Fix impact: More accurate model strength assessment
+
+### Model Information
+
+**value0.02 (LLaMA, ep0036)**:
+- Path: `/home/claude/data/hf-trigoRL/trigor/20251220-trigo-value-llama-l6-h64-251220-value0.02/LlamaCausalLM_ep0036_tree.onnx`
+- Training: Value loss factor 0.02
+- Architecture: LLaMA, 6 layers, 64 hidden size
+
+**value0.06 (LLaMA, ep0030)**:
+- Path: `/home/claude/data/hf-trigoRL/trigor/20251220-trigo-value-llama-l6-h64-251220-value0.06/LlamaCausalLM_ep0030_tree.onnx`
+- Training: Value loss factor 0.06
+- Architecture: LLaMA, 6 layers, 64 hidden size
+
+**LLaMA15 (ep0045, 20251215)**:
+- Path: `./public/onnx/20251215-trigo-value-llama-l6-h64-251211/LlamaCausalLM_ep0045_tree.onnx`
+- Training: Earlier checkpoint from 2025-12-15
+- Architecture: LLaMA, 6 layers, 64 hidden size
+
+**GPT2 (ep0019, 20251204)**:
+- Path: `./public/onnx/20251204-trigo-value-gpt2-l6-h64-251125-lr500/GPT2CausalLM_ep0019_tree.onnx`
+- Training: Earlier checkpoint from 2025-12-04
+- Architecture: GPT2, 6 layers, 64 hidden size
+
+### Recommendations
+
+1. **Training Strategy**:
+   - Value loss factor 0.02 appears optimal for balanced learning
+   - Higher factors (0.06) may hurt policy quality
+   - LLaMA architecture recommended for MCTS-based play
+
+2. **Evaluation Protocol**:
+   - Always test both with and without MCTS
+   - Direct policy play reveals policy network quality
+   - MCTS play reveals value network quality
+   - Different metrics may favor different models
+
+3. **Future Work**:
+   - Test on larger boards (5×5×5) to see if patterns hold
+   - Investigate LLaMA15's strong value network performance
+   - Experiment with value loss factors between 0.02-0.06
+   - Profile MCTS performance for larger search budgets (100+ simulations)
+
+### Files Modified
+
+Battle scripts and game engine remain unchanged from previous terminal checking bug fix session.
+
+**Battle Results**:
+- Without MCTS: `tools/output/battle_20251221_final_*/`
+- With MCTS: `tools/output/battle_20251221_mcts40_*_5x5x1/`
+
