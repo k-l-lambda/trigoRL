@@ -327,12 +327,16 @@ def main(config: DictConfig):
 	)
 
 	# Resume from checkpoint if specified
+	# Priority: directory resume > resume_from > use_pretrain
 	if checkpoint_file:
-		# Resume from experiment directory
+		# Resume from experiment directory (highest priority)
 		trainer.load_checkpoint(str(checkpoint_file))
 	elif config.get('resume_from', None):
-		# Resume from explicitly specified checkpoint path
+		# Resume from explicitly specified checkpoint path (full resume)
 		trainer.load_checkpoint(config.resume_from)
+	elif config.get('use_pretrain', None):
+		# Load pretrained weights only (epoch starts from 0)
+		trainer.load_pretrain(config.use_pretrain)
 
 	# Start training
 	trainer.train()

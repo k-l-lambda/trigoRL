@@ -707,3 +707,28 @@ class LMTrainer:
 		self.best_val_metric = checkpoint['best_val_metric']
 
 		logger.info(f"Resumed from epoch {self.current_epoch}, step {self.global_step}, examples {self.global_examples}, validations {self.validation_count}")
+
+
+	def load_pretrain(self, checkpoint_path: str):
+		"""
+		Load only model weights from checkpoint (for pretraining initialization).
+
+		Unlike load_checkpoint, this method:
+		- Only loads model weights (not optimizer, scheduler, or training state)
+		- Keeps epoch at 0 (fresh training start)
+		- Does not restore global_step, global_examples, validation_count, best_val_metric
+
+		Args:
+		    checkpoint_path: Path to checkpoint file.
+		"""
+		logger.info(f"Loading pretrained weights from: {checkpoint_path}")
+		checkpoint = self.checkpoint_mgr.load(checkpoint_path, device=self.config.device)
+
+		# Only restore model weights
+		self.model.load_state_dict(checkpoint['model_state_dict'])
+
+		# Log info about the source checkpoint
+		source_epoch = checkpoint.get('epoch', 'unknown')
+		source_step = checkpoint.get('global_step', 'unknown')
+		logger.info(f"Loaded weights from checkpoint (epoch {source_epoch}, step {source_step})")
+		logger.info("Training will start from epoch 0 with fresh optimizer/scheduler state")
