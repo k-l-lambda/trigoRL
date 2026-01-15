@@ -14257,3 +14257,142 @@ The hypothesis is that pretraining provides a strong initialization advantage th
 This milestone demonstrates that pretraining initialization provides a fundamental advantage in RL agent training. A 6-layer pretrained model substantially outperforms a 12-layer model trained from scratch, particularly under MCTS evaluation where value function quality becomes the performance bottleneck. These results validate the pretraining strategy and suggest that depth alone without proper initialization is insufficient for effective RL training in Trigo.
 
 </details>
+
+
+## 2026/01/15
+
+> Conduct in-depth research and analysis of MuZero architecture (arXiv:1911.08265v2) to inform Trigo model design decisions.
+
+<details>
+<summary>MuZero Architecture Analysis - Hidden State Representations and Planning Comparison</summary>
+
+### Research Objective
+
+Analyze state-of-the-art RL architectures to understand hidden state representations and planning mechanisms, with focus on how findings apply to Trigo's Transformer KV cache design.
+
+### Key Research Topics
+
+**1. MuZero Three-Function Architecture**
+
+MuZero separates planning into three learned functions:
+- **Representation function h**: Encodes raw observations into hidden state
+- **Dynamics function g**: Predicts next hidden state given action (models environment transitions)
+- **Prediction function f**: Predicts policy and value from hidden state
+
+**Key Insight**: MuZero performs planning in a learned hidden space rather than using perfect game rules. The hidden state is an abstraction learned to minimize prediction error.
+
+**2. Observation/Action Encoding Comparison: AlphaZero vs MuZero**
+
+Analyzed encoding strategies across different domains:
+
+**Board Games (Go, Chess, Shogi)**:
+- **AlphaZero**: Direct board representation (stone colors) + move history planes
+- **MuZero**: Learns compressed hidden state from observations (same structure, more efficient space)
+- **Observation form**: Last 8 board positions concatenated
+
+**Atari Games**:
+- **AlphaZero**: Not applicable (perfect information assumption)
+- **MuZero**: Last 4 frames stacked (motion detection)
+- **Key difference**: Must learn state abstraction without perfect rules
+
+**3. Reward Handling in Board Games**
+
+Critical finding about terminal rewards:
+- **Board games**: Only terminal rewards (no intermediate rewards)
+- **Go/Chess/Shogi**: Win/loss/draw determined only at game end
+- **MuZero approach**: Predicts 0 reward at every step, then terminal reward at game end
+- **Implication**: Dynamics function only models board state changes, not scoring
+
+**4. Comprehensive AlphaZero vs MuZero Architectural Comparison**
+
+| Aspect | AlphaZero | MuZero |
+|--------|-----------|--------|
+| **Search Space** | Perfect game tree (rules) | Learned hidden space |
+| **State Representation** | Board pixels | Learned abstraction h(obs) |
+| **State Transitions** | Perfect rules (Go logic) | Learned g(hidden, action) |
+| **Advantage** | Fast, deterministic | Works with incomplete info |
+| **Disadvantage** | Needs perfect rules | More complex, slower tree search |
+
+**Key Difference**: AlphaZero searches in actual game space with known rules; MuZero searches in learned space where rules are implicit.
+
+**5. Can MuZero Equal AlphaZero With Reward Omission?**
+
+Research question: If we remove rewards from MuZero, does it become equivalent to AlphaZero?
+
+**Answer**: NO - they differ fundamentally on three dimensions:
+
+1. **Search Space Difference**:
+   - AlphaZero: Searches in actual board coordinates (real Go positions)
+   - MuZero: Searches in learned hidden dimensions (compressed abstract space)
+   - Even with rewards removed, the search happens in different spaces
+
+2. **State Transition Modeling**:
+   - AlphaZero: Uses game rules (deterministic, perfect)
+   - MuZero: Learns dynamics function g (approximation, must be trained)
+   - Different mechanisms even if outcomes similar in some cases
+
+3. **Network Architecture Complexity**:
+   - AlphaZero: Single network for policy/value (takes board)
+   - MuZero: Three networks (h, g, f) all trained jointly
+   - More parameters and complexity in MuZero
+
+**Conclusion**: MuZero is a distinct paradigm, not a special case of AlphaZero with rewards set to zero.
+
+**6. Trigo's Transformer KV Cache as Implicit Hidden State**
+
+Deep analysis of connection between Trigo architecture and MuZero:
+
+**MuZero Hidden State**:
+- Learned representation from observations
+- Used across MCTS simulations for tree planning
+- Grows as sequence extends (accumulates game history)
+
+**Trigo Transformer KV Cache**:
+- KV cache encodes attention-weighted game history (implicit state)
+- Functions similarly to MuZero's hidden state
+- Enables fast prefix-reuse in MCTS evaluations
+
+**Key Finding**: The KV cache acts as an implicit state representation analogous to MuZero's hidden states:
+- **Similarity**: Both compress sequence information into fixed-dimensional representation
+- **Similarity**: Both enable efficient planning by reusing computed state
+- **Similarity**: Both capture sufficient information for policy/value prediction
+- **Difference**: KV cache is deterministic (based on Transformer attention); MuZero's h is learned
+- **Implication**: Trigo's architecture naturally implements MuZero-like state abstraction through Transformer attention
+
+**Design Insight**: Phase 5.4's prefix-cache implementation achieves similar benefits to MuZero by:
+1. Computing prefix cache once (analogous to h(observation))
+2. Reusing cache for multiple move evaluations (analogous to multiple g() calls in tree search)
+3. Extracting policy/value from cached hidden states (analogous to f())
+
+### Research Implications
+
+**For Trigo Model Design**:
+1. Current Transformer KV cache design aligns with MuZero principles
+2. Prefix-reuse pattern (Phase 5.4) implements efficient hidden state reuse
+3. 1.5× speedup from cache reuse directly analogous to MuZero planning efficiency
+4. Architecture is sound for large-scale MCTS self-play
+
+**For Future Optimization**:
+1. Consider explicit value head learning (similar to MuZero's prediction network)
+2. Investigate learned observation encoding (MuZero's h function)
+3. Evaluate hierarchical planning with multiple abstraction levels
+
+### Key Technical Insights
+
+- **Hidden state abstraction**: Fundamental to efficient planning in both MuZero and Trigo
+- **Prefix reuse**: Both architectures benefit from computing context once, reusing across multiple evaluations
+- **State representation trade-offs**: Learned (MuZero) vs deterministic (Transformer attention)
+- **Convergence to similar patterns**: Different approaches reaching similar architectural solutions
+
+### Session Conclusion
+
+Research validates theoretical foundation of Trigo's Transformer + MCTS architecture. The connection to MuZero's hidden state paradigm confirms that Phase 5.4's prefix-cache implementation represents a principled approach to efficient planning. No architectural changes required, but insights inform future optimization opportunities.
+
+### References
+
+- MuZero (arXiv:1911.08265v2): Mastering Atari, Go, Chess and Shogi by Planning with a Learned Model
+- Related insights: Hidden state representations in RL planning, efficient MCTS with learned models
+
+</details>
+
+
