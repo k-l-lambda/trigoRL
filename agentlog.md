@@ -14691,3 +14691,143 @@ The discovery of existing tree attention infrastructure in Trigo's codebase tran
 </details>
 
 
+## 2026/01/16
+
+> Enhance TGNValueDataset with move_pre_indices field for token-level move position tracking.
+
+<details>
+<summary>Enhanced TGNValueDataset with move_pre_indices field and refactored to use token positions</summary>
+
+### Objective
+
+Add `move_pre_indices` field to `TGNValueDataset` to track token positions before each move starts. Refactored from character-based positions to token-based positions for proper integration with transformer models.
+
+### Design Decision
+
+**Initial approach**: Created separate `TGNMovePositionDataset` class with character-based positions
+**Final approach**: Integrated into existing `TGNValueDataset` with token-based positions
+
+**Rationale**:
+- Token positions are more useful for transformer training than character positions
+- Avoid code duplication by extending existing `parse_tgn_file()` function
+- `move_pre_indices` complements existing `move_end_positions` field
+- Single dataset class is simpler to maintain
+
+### Implementation
+
+**Modified** `/home/camus/work/trigoRL/trigor/data/tgn_value_dataset.py`
+
+Enhanced `parse_tgn_file()` function:
+```python
+def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer)
+    -> Tuple[List[str], float, List[int], List[int]]:
+    # Returns: (moves, score, move_end_positions, move_pre_indices)
+```
+
+**New logic**:
+1. Track character positions before each move (`move_start - 1`)
+2. Track character positions after each move (`move_end`)
+3. Convert both to token positions via tokenization
+4. Return both position arrays
+
+**Token position calculation**:
+- `move_end_positions`: Tokenize text up to move end → last token index
+- `move_pre_indices`: Tokenize text up to char before move → last token index
+
+### Dataset Output Schema
+
+```python
+{
+    'input_ids': torch.Tensor,           # [max_length-1]
+    'labels': torch.Tensor,               # [max_length-1]
+    'attention_mask': torch.Tensor,       # [max_length-1]
+    'value_score': torch.Tensor,          # scalar float32
+    'move_end_positions': torch.Tensor,   # [variable] int64 - token positions where moves end
+    'move_pre_indices': torch.Tensor,     # [variable] int64 - token positions before moves start
+}
+```
+
+### Updated Methods
+
+1. **`parse_tgn_file()`**: Returns 4-tuple instead of 3-tuple
+2. **`TGNValueDataset.__getitem__()`**: Unpacks 4 values, adds `move_pre_indices` field
+3. **`TGNValueDataset.collate_batch()`**: Handles `move_pre_indices` as list of tensors
+4. **Class docstring**: Updated output format documentation
+
+### Test Suite
+
+**Created** `test_value_dataset_move_pre.py`
+
+Three test categories:
+
+1. **Function-level testing**:
+   - `parse_tgn_file()` returns 4 values with correct types
+   - Array lengths match (moves, end_pos, pre_idx all same length)
+   - Constraint validation: `move_pre_indices[i] < move_end_positions[i]`
+
+2. **Token position verification**:
+   - Tokenize text and verify positions align with moves
+   - Decode tokens up to positions and verify move presence
+   - Manual text examples with known structure
+
+3. **Dataset integration testing**:
+   - Load 197 real TGN files from `data/selfplay_10k`
+   - Verify all fields present in output
+   - Validate 123 moves in first sample
+   - Check constraint across all moves
+
+**Test Results**:
+```
+✅ ALL TESTS PASSING
+- parse_tgn_file: 4 moves extracted with 4 end positions and 4 pre indices
+- Token positions: Correct alignment verified via decode
+- Constraint: All pre_idx < end_pos (verified for all 123 moves)
+- Dataset integration: 197 files loaded successfully
+```
+
+### Removed Files
+
+Deleted initial implementation that used character positions:
+- `trigor/data/tgn_move_position_dataset.py` (245 lines) - Separate dataset class
+- `test_move_position_dataset.py` (178 lines) - Character-based tests
+- `trigor/data/README_move_position.md` (287 lines) - Separate documentation
+
+These were replaced by enhancements to `tgn_value_dataset.py`.
+
+### Technical Details
+
+**Token position vs Character position**:
+- Character position: Index in raw text string
+- Token position: Index in tokenized sequence (after `tokenizer.encode()`)
+- Token positions account for byte-level encoding and special tokens
+
+**move_pre_indices definition**:
+- Points to the token **before** the move starts (typically whitespace or punctuation)
+- Calculated from character position `move_start - 1`, then converted to token index
+- Useful for attention masking: attending to context before move
+
+**Relationship between positions**:
+```
+Text:    [Board 2x2x2]\n1. z00 zaa\n2. aaz
+Tokens:  ... [19] [20] [21] [22] [23] [24] ...
+                  ^   z   0   0  ^   z   a   ...
+                  |              |
+            move_pre_indices  move_end_positions
+```
+
+For move "z00":
+- `move_pre_indices[0] = 19` (token before 'z')
+- `move_end_positions[0] = 22` (token at last '0')
+
+### Key Achievements
+
+- ✅ Token-based positions for transformer compatibility
+- ✅ `move_pre_indices` field added to existing dataset
+- ✅ All tests passing with 197 real TGN files
+- ✅ Constraint `pre_idx < end_pos` validated
+- ✅ Code consolidation (removed duplicate dataset class)
+- ✅ Backward compatible (existing fields unchanged)
+
+</details>
+
+

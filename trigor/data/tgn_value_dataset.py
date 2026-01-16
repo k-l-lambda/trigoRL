@@ -16,7 +16,7 @@ from trigor.data.tgn_dataset import TGNDataset
 from trigor.data.tokenizer import TGNByteTokenizer
 
 
-def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], float, List[int]]:
+def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], float, List[int], List[int]]:
 	"""
 	Parse TGN file to extract moves, score, and token positions.
 
@@ -30,13 +30,14 @@ def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], f
 
 	Args:
 	    text: Raw TGN file content
-	    tokenizer: Tokenizer to compute move end positions
+	    tokenizer: Tokenizer to compute move token positions
 
 	Returns:
-	    Tuple of (moves, score, move_end_positions):
+	    Tuple of (moves, score, move_end_positions, move_pre_indices):
 	        - moves: List of move strings (e.g., ["z00", "zaa", "aaz", "aaa"])
 	        - score: Final game score (negative = Black win, positive = White win)
 	        - move_end_positions: List of token positions where each move ends
+	        - move_pre_indices: List of token positions before each move starts
 	                              Positions are relative to the tokenized full text
 
 	Score Interpretation:
@@ -45,19 +46,20 @@ def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], f
 	    - Zero: Draw or missing score
 
 	Move Token Positions:
-	    The positions array indicates where each move ends in the tokenized full text.
+	    - move_end_positions: Token index of the last token of each move
+	    - move_pre_indices: Token index before each move starts (typically whitespace)
 	    Uses regex pattern \b[0a-zPR]+\b to match individual moves robustly.
 
 	Examples:
 	    >>> tokenizer = TGNByteTokenizer()
 	    >>> text = "[Board 2x2x2]\\n1. z00 zaa\\n2. aaa\\n; -5"
-	    >>> moves, score, positions = parse_tgn_file(text, tokenizer)
+	    >>> moves, score, end_pos, pre_pos = parse_tgn_file(text, tokenizer)
 	    >>> moves
 	    ['z00', 'zaa', 'aaa']
 	    >>> score
 	    -5.0
-	    >>> len(positions)
-	    3
+	    >>> len(end_pos), len(pre_pos)
+	    (3, 3)
 	"""
 	score = 0.0
 
@@ -73,7 +75,8 @@ def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], f
 	round_pattern = re.compile(r'\d+\.\s+([0a-zPR\s]+)')
 
 	moves = []
-	move_positions_in_text = []  # Store (start, end) character positions
+	move_end_positions_in_text = []  # Store character positions where moves end
+	move_pre_positions_in_text = []  # Store character positions before moves start
 
 	# Find all move sequences (e.g., "1. z00 zaa" captures "z00 zaa")
 	for match in round_pattern.finditer(text):
@@ -89,12 +92,13 @@ def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], f
 			if move_start != -1:
 				move_end = move_start + len(move)
 				moves.append(move)
-				move_positions_in_text.append(move_end)  # Character position where move ends
+				move_end_positions_in_text.append(move_end)  # Character position where move ends
+				move_pre_positions_in_text.append(move_start - 1)  # Character position before move starts
 				start_offset = move_end
 
 	# Convert character positions to token positions
 	move_end_positions = []
-	for char_pos in move_positions_in_text:
+	for char_pos in move_end_positions_in_text:
 		# Tokenize text up to this character position
 		text_up_to_move = text[:char_pos]
 		tokens_up_to_move = tokenizer.encode(
@@ -106,7 +110,20 @@ def parse_tgn_file(text: str, tokenizer: TGNByteTokenizer) -> Tuple[List[str], f
 		# Token position is the last token index (0-indexed)
 		move_end_positions.append(len(tokens_up_to_move) - 1)
 
-	return moves, score, move_end_positions
+	move_pre_indices = []
+	for char_pos in move_pre_positions_in_text:
+		# Tokenize text up to this character position
+		text_before_move = text[:char_pos + 1]  # Include the character before move
+		tokens_before_move = tokenizer.encode(
+			text_before_move,
+			add_special_tokens=True,  # Includes [START] token
+			padding=False,
+			truncation=False,
+		)
+		# Token position is the last token index (0-indexed)
+		move_pre_indices.append(len(tokens_before_move) - 1)
+
+	return moves, score, move_end_positions, move_pre_indices
 
 
 @register_dataset('TGNValueDataset')
@@ -118,6 +135,7 @@ class TGNValueDataset(TGNDataset):
 	- TGN structure parsing (moves, score)
 	- value_score field in output (final game score)
 	- move_end_positions field (token positions where moves end)
+	- move_pre_indices field (token positions before moves start)
 
 	The base class handles:
 	- File discovery and filtering
@@ -142,6 +160,7 @@ class TGNValueDataset(TGNDataset):
 	        'attention_mask': torch.Tensor,       # [max_length-1]
 	        'value_score': torch.Tensor,          # scalar float32
 	        'move_end_positions': torch.Tensor,   # [variable] int64
+	        'move_pre_indices': torch.Tensor,     # [variable] int64
 	    }
 
 	Usage:
@@ -157,6 +176,7 @@ class TGNValueDataset(TGNDataset):
 	    >>> print(sample['value_score'])         # Final game score
 	    >>> print(len(sample['move_end_positions']))  # Number of moves
 	    >>> print(sample['move_end_positions'])  # Token positions where moves end
+	    >>> print(sample['move_pre_indices'])    # Token positions before moves start
 	"""
 
 	@classmethod
@@ -248,7 +268,8 @@ class TGNValueDataset(TGNDataset):
 		        - labels: Target tokens [max_length-1]
 		        - attention_mask: 1D mask [max_length-1]
 		        - value_score: Scalar game result (float32)
-		        - move_end_positions: Token positions [variable] (int64)
+		        - move_end_positions: Token positions where each move ends [variable] (int64)
+		        - move_pre_indices: Token positions before each move starts [variable] (int64)
 		"""
 		# Get standard dataset output from parent class
 		base_output = super().__getitem__(idx)
@@ -263,17 +284,20 @@ class TGNValueDataset(TGNDataset):
 				# Fallback values
 				base_output['value_score'] = torch.tensor(0.0, dtype=torch.float32)
 				base_output['move_end_positions'] = torch.tensor([], dtype=torch.long)
+				base_output['move_pre_indices'] = torch.tensor([], dtype=torch.long)
 				return base_output
 
 			try:
-				moves, score, move_end_positions = parse_tgn_file(text, self.tokenizer)
+				moves, score, move_end_positions, move_pre_indices = parse_tgn_file(text, self.tokenizer)
 				base_output['value_score'] = torch.tensor(score, dtype=torch.float32)
 				base_output['move_end_positions'] = torch.tensor(move_end_positions, dtype=torch.long)
+				base_output['move_pre_indices'] = torch.tensor(move_pre_indices, dtype=torch.long)
 			except Exception as e:
 				# Fallback for malformed files
 				print(f"Warning: Failed to parse {file_path.name}: {e}")
 				base_output['value_score'] = torch.tensor(0.0, dtype=torch.float32)
 				base_output['move_end_positions'] = torch.tensor([], dtype=torch.long)
+				base_output['move_pre_indices'] = torch.tensor([], dtype=torch.long)
 
 		return base_output
 
@@ -282,7 +306,7 @@ class TGNValueDataset(TGNDataset):
 		"""
 		Collate function for DataLoader.
 
-		Extends parent collate to handle value_score and move_end_positions fields.
+		Extends parent collate to handle value_score, move_end_positions, and move_pre_indices fields.
 
 		Args:
 		    batch: List of dataset outputs (each is a dict)
@@ -292,6 +316,7 @@ class TGNValueDataset(TGNDataset):
 		        - input_ids, labels, attention_mask: [batch_size, seq_len]
 		        - value_score: [batch_size]
 		        - move_end_positions: List of tensors (variable length per sample)
+		        - move_pre_indices: List of tensors (variable length per sample)
 		"""
 		# Use parent collate for standard fields
 		collated = TGNDataset.collate_batch(batch)
@@ -303,6 +328,10 @@ class TGNValueDataset(TGNDataset):
 		# Keep move_end_positions as list (variable length per sample)
 		if 'move_end_positions' in batch[0]:
 			collated['move_end_positions'] = [x['move_end_positions'] for x in batch]
+
+		# Keep move_pre_indices as list (variable length per sample)
+		if 'move_pre_indices' in batch[0]:
+			collated['move_pre_indices'] = [x['move_pre_indices'] for x in batch]
 
 		return collated
 
